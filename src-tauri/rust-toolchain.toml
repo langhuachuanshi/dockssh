@@ -1,0 +1,7 @@
+# DockSSH 使用 MSVC 工具链（已设为全局默认）。
+# 原因：Tauri + windows-rs 在 GNU (MinGW) 下导出符号过多，
+# 会触发 MinGW 链接器 "export ordinal too large" 错误。
+# MSVC 是 Tauri 官方推荐的 Windows 目标。
+[toolchain]
+channel = "stable"
+profile = "minimal"

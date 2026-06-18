@@ -1,0 +1,56 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "DockSSH - 零安装的 Docker 可视化管理工具（纯 SSH）"
+authors = ["DockSSH"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# SSH 客户端（纯 Rust）
+russh = "0.46"
+russh-keys = "0.46"
+russh-sftp = "2"
+
+# 日志
+log = "0.4"
+anyhow = "1"
+thiserror = "2"
+
+# 凭据加密与系统密钥环
+keyring = "2"
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+sha2 = "0.10"
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 命令执行辅助
+uuid = { version = "1", features = ["v4"] }
+once_cell = "1"
+
+[features]
+# 此 feature 用于自定义协议
+custom-protocol = ["tauri/custom-protocol"]
