@@ -122,3 +122,26 @@ export interface ContainerInspect {
 export interface VolumeInspect {
   mountpoint: string
 }
+
+// ===== 错误（与 src-tauri/src/error.rs 的 ErrorKind 对齐） =====
+
+/**
+ * 错误分类。前端据此给针对性提示文案 / 引导（重试 / 编辑 / 检查网络…），
+ * 而非靠错误字符串猜。与后端 ErrorKind 的 #[serde(rename_all="lowercase")] 对齐。
+ */
+export type ErrorKind =
+  | 'network' // 网络/连接层：TCP 不通、SSH 握手失败、端口拒绝
+  | 'auth' // 认证：密码错、密钥被拒、私钥口令错
+  | 'timeout' // 超时：TCP 连接超时、SSH 握手超时
+  | 'notfound' // 资源不存在：主机找不到
+  | 'credential' // 本地凭据读不到（keyring 缺失/损坏）—— 与 auth 区分
+  | 'other' // 其它：IO / 解析 / 加密 / Docker 探测等
+
+/**
+ * 后端 AppError 序列化后的结构 { kind, message }。
+ * Tauri invoke 失败时，错误会以该对象形式抛给前端。
+ */
+export interface StructuredError {
+  kind: ErrorKind
+  message: string
+}

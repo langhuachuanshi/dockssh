@@ -85,7 +85,7 @@ async function remove(host: Host) {
   }
 }
 
-// 单击卡片：直接连接并进入（防重入：connect 内部已用 connecting 锁）
+// 单击卡片：直接连接并进入（防重入：connecting 锁）
 function onCardClick(host: Host) {
   connect(host)
 }
@@ -95,6 +95,50 @@ function onCardCommand(command: string, host: Host) {
   if (command === 'edit') openEdit(host)
   else if (command === 'delete') remove(host)
   else disconnect(host)
+}
+
+/** 连接阶段 → 卡片上的进度文案 */
+function phaseText(host: Host): string {
+  switch (store.phaseOf(host.id)) {
+    case 'connecting':
+      return '正在建立连接…'
+    case 'auth':
+      return '正在认证…'
+    case 'probing':
+      return '正在探测环境…'
+    default:
+      return '连接中…'
+  }
+}
+
+/** 错误分类 → 友好标题 + 建议操作文案 */
+function errorHint(kind: string): { title: string; tip: string } {
+  switch (kind) {
+    case 'timeout':
+      return {
+        title: '连接超时',
+        tip: '请检查网络是否通畅，或主机是否在线。',
+      }
+    case 'network':
+      return {
+        title: '无法连接到主机',
+        tip: '请检查地址、端口是否正确，以及防火墙是否放行。',
+      }
+    case 'auth':
+      return {
+        title: '认证被拒绝',
+        tip: '用户名或密码/密钥不正确，请检查凭据。',
+      }
+    case 'credential':
+      return {
+        title: '本地凭据缺失',
+        tip: '未读取到保存的密码或密钥口令，请重新编辑主机填写凭据。',
+      }
+    case 'notfound':
+      return { title: '主机不存在', tip: '该主机配置可能已被删除。' }
+    default:
+      return { title: '连接失败', tip: '请稍后重试，或检查目标主机的 Docker 环境。' }
+  }
 }
 
 async function connect(host: Host) {
@@ -109,7 +153,35 @@ async function connect(host: Host) {
     tabsStore.open(host.id)
     router.push({ name: 'dashboard', params: { id: host.id } })
   } catch (e) {
-    ElMessage.error(`连接失败：${e}`)
+    // store.connect 抛出的是 StructuredError {kind,message}
+    const err = (e as { kind?: string; message?: string }) ?? {}
+    const kind = typeof err.kind === 'string' ? err.kind : 'other'
+    const message = typeof err.message === 'string' ? err.message : String(e)
+    const hint = errorHint(kind)
+    // 失败弹窗：标题 + 详细信息 + 建议操作 + 重试/编辑按钮
+    ElMessageBox.alert(
+      `<div style="line-height:1.7">
+        <div style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">${hint.tip}</div>
+        <div style="margin-top:10px;padding:8px 10px;background:var(--el-fill-color-light);border-radius:6px;font-size:12px;color:var(--el-text-color-secondary);word-break:break-all">${message}</div>
+      </div>`,
+      hint.title,
+      {
+        dangerouslyUseHTMLString: true,
+        type: 'error',
+        confirmButtonText: '重试',
+        cancelButtonText: '编辑主机',
+        showCancelButton: true,
+        distinguishCancelAndClose: true,
+      },
+    )
+      .then(() => {
+        // 用户点「重试」
+        connect(host)
+      })
+      .catch((action: string) => {
+        // cancel = 用户点了「编辑主机」；close = 关闭，什么都不做
+        if (action === 'cancel') openEdit(host)
+      })
   } finally {
     connecting.value = null
   }
@@ -202,9 +274,10 @@ async function disconnect(host: Host) {
             </el-tag>
             <el-tag v-if="store.probeMap[h.id].is_wsl2" size="small" type="info" effect="dark">WSL2</el-tag>
           </div>
-          <!-- 离线：连接中提示（无连接中状态时留空） -->
+          <!-- 离线：连接阶段提示 / 失败提示 -->
           <div class="offline-status" v-else>
-            <span v-if="connecting === h.id" class="loading-text">连接中…</span>
+            <span v-if="connecting === h.id" class="loading-text">{{ phaseText(h) }}</span>
+            <span v-else-if="store.phaseOf(h.id) === 'failed'" class="fail-text">连接失败</span>
           </div>
         </div>
       </div>
@@ -407,6 +480,10 @@ export default {
 .loading-text {
   font-size: 12px;
   color: var(--el-color-primary);
+}
+.fail-text {
+  font-size: 12px;
+  color: var(--el-color-danger);
 }
 .empty {
   margin-top: 40px;

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use russh::client::{self, Config, Handle, Handler};
+use russh::client::{Config, Handle, Handler};
 use russh::{ChannelId, ChannelMsg, Pty};
 use russh_keys::key;
 use russh_sftp::client::SftpSession;
@@ -51,6 +51,12 @@ pub struct SshClient {
 impl SshClient {
     /// 建立 TCP + SSH 连接（不做认证）。认证在 `authenticate_*` 方法中完成。
     ///
+    /// 拆分 TCP 与 SSH 握手两阶段，便于给前端精准的错误分类：
+    /// - TCP 阶段失败 → Network（拒绝/不可达）或 Timeout（超时）
+    /// - SSH 握手失败 → Network（对端不是 SSH 服务 / 握手异常）
+    ///
+    /// TCP 连接带 10s 超时，避免目标不可达时长时间卡住。
+    ///
     /// 注：当前无条件信任服务端 host key（见 ClientHandler::check_server_key）。
     /// DockSSH 的使用场景是连接用户自己配置的主机，不做 known_hosts 校验。
     pub async fn connect(addr: &str, port: u16) -> AppResult<Self> {
@@ -59,9 +65,40 @@ impl SshClient {
         // 关闭空闲超时反而可能导致长连接（如 logs -f）被误断，这里设大一些。
         let config = Arc::new(config);
 
-        let handle = client::connect(config, (addr, port), ClientHandler)
+        // 阶段 1：TCP 连接（带 10s 超时）
+        let target = (addr, port);
+        let socket = match tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::TcpStream::connect(target),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(AppError::Ssh(format!("连接 {addr}:{port} 超时")))
+            }
+            // tokio TcpStream::connect 对端口未开返回 ConnectionRefused
+            Ok(Err(e)) => {
+                return Err(AppError::Ssh(format!(
+                    "无法连接到 {addr}:{port}：{e}（请检查地址、端口、防火墙）"
+                )))
+            }
+            // 整个 connect future 超时（网络不可达/对端无响应）
+            Err(_) => {
+                return Err(AppError::Ssh(format!(
+                    "连接 {addr}:{port} 超时（请检查网络或主机是否在线）"
+                )))
+            }
+        };
+
+        // 阶段 2：SSH 握手
+        let handle = russh::client::connect_stream(config, socket, ClientHandler)
             .await
-            .map_err(|e| AppError::Ssh(format!("连接 {addr}:{port} 失败: {e}")))?;
+            .map_err(|e| {
+                AppError::Ssh(format!(
+                    "SSH 握手失败：{e}（端口可能不是 SSH 服务）"
+                ))
+            })?;
 
         Ok(Self {
             handle,
@@ -75,7 +112,7 @@ impl SshClient {
             .handle
             .authenticate_password(user, password)
             .await
-            .map_err(|e| AppError::Ssh(format!("密码认证失败: {e}")))?;
+            .map_err(|e| AppError::Credential(format!("密码认证失败: {e}")))?;
         if ok {
             Ok(())
         } else {
@@ -96,7 +133,7 @@ impl SshClient {
             .handle
             .authenticate_publickey(user, Arc::new(key_pair))
             .await
-            .map_err(|e| AppError::Ssh(format!("公钥认证失败: {e}")))?;
+            .map_err(|e| AppError::Credential(format!("公钥认证失败: {e}")))?;
         if ok {
             Ok(())
         } else {

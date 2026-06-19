@@ -45,9 +45,17 @@ function handleTabClick(pane: TabsPaneContext) {
 }
 
 // 关闭 tab（点 ×）
+// 产品决策：dockssh 的 tab 与 SSH 连接 1:1，关 tab = 断开连接，
+// 避免 SSH 会话泄漏（后端 pool 留死会话）。后端 pool.remove 对不存在的会话容错，
+// 所以无需先判断 isOnline，直接 disconnect 即可。
 function onTabRemove(name: string | number) {
   const id = String(name)
   const next = tabsStore.close(id)
+  // 后台断开连接，不阻塞 UI（失败仅记录，不打扰用户）
+  hostsStore.disconnect(id).catch((e) => {
+    // eslint-disable-next-line no-console
+    console.warn(`关闭标签时断开主机 ${id} 失败:`, e)
+  })
   if (next) {
     router.push({ name: 'dashboard', params: { id: next } })
   } else {
@@ -141,12 +149,11 @@ watch(
         >
           <template #label>
             <span class="tab-label">
-              <el-icon
+              <span
                 class="dot"
-                :color="hostsStore.isOnline(h.id) ? 'var(--el-color-success)' : 'var(--el-text-color-secondary)'"
-              >
-                <component :is="hostsStore.isOnline(h.id) ? 'CircleCheckFilled' : 'CircleClose'" />
-              </el-icon>
+                :class="{ online: hostsStore.isOnline(h.id) }"
+                :title="hostsStore.isOnline(h.id) ? '已连接' : '未连接'"
+              />
               <span class="name">{{ h.name }}</span>
             </span>
           </template>
@@ -155,11 +162,6 @@ watch(
     </div>
   </div>
 </template>
-
-<script lang="ts">
-import { CircleCheckFilled, CircleClose } from '@element-plus/icons-vue'
-export default { components: { CircleCheckFilled, CircleClose } }
-</script>
 
 <style scoped>
 .host-tabs {
@@ -204,8 +206,18 @@ export default { components: { CircleCheckFilled, CircleClose } }
   align-items: center;
   gap: 5px;
 }
+/* 状态圆点：在线实心绿，离线灰。比图标更轻、不与关闭×冲突 */
 .dot {
-  font-size: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--el-text-color-placeholder);
+  transition: background 0.2s ease;
+}
+.dot.online {
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-success) 20%, transparent);
 }
 .name {
   max-width: 140px;
