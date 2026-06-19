@@ -23,11 +23,8 @@ pub struct HostInput {
     pub password: Option<String>,
     /// 私钥口令（auth_type = Key 且密钥有口令时填写）
     pub passphrase: Option<String>,
-    pub verify_host_key: bool,
     #[serde(default)]
     pub group: Option<String>,
-    #[serde(default)]
-    pub color: Option<String>,
 }
 
 /// 列出所有主机（不含密码）。
@@ -47,9 +44,7 @@ pub async fn save_host(state: State<'_, SharedState>, input: HostInput) -> AppRe
         user: input.user,
         auth_type: input.auth_type,
         key_path: input.key_path,
-        verify_host_key: input.verify_host_key,
         group: input.group,
-        color: input.color,
     };
     state
         .upsert_host(host.clone(), input.password, input.passphrase)
@@ -59,7 +54,13 @@ pub async fn save_host(state: State<'_, SharedState>, input: HostInput) -> AppRe
 
 /// 删除主机。
 #[tauri::command]
-pub async fn delete_host(state: State<'_, SharedState>, host_id: String) -> AppResult<()> {
+pub async fn delete_host(
+    state: State<'_, SharedState>,
+    sessions: State<'_, std::sync::Arc<crate::pty::PtySessions>>,
+    host_id: String,
+) -> AppResult<()> {
+    // 先清掉该主机的所有终端会话，再删主机
+    sessions.kill_by_host(&host_id).await;
     state.delete_host(&host_id).await
 }
 
@@ -76,7 +77,7 @@ pub async fn connect_host(
     host_id: String,
 ) -> AppResult<ConnectResult> {
     let host = state.get_host(&host_id).await?;
-    let mut client = SshClient::connect(&host.host, host.port, host.verify_host_key).await?;
+    let mut client = SshClient::connect(&host.host, host.port).await?;
 
     match host.auth_type {
         AuthType::Password => {
@@ -93,9 +94,6 @@ pub async fn connect_host(
                 .auth_publickey(&host.user, &path, passphrase.as_deref())
                 .await?;
         }
-        AuthType::Agent => {
-            client.auth_agent(&host.user).await?;
-        }
     }
 
     // 探测目标机
@@ -108,7 +106,13 @@ pub async fn connect_host(
 
 /// 主动断开某主机。
 #[tauri::command]
-pub async fn disconnect_host(state: State<'_, SharedState>, host_id: String) -> AppResult<()> {
+pub async fn disconnect_host(
+    state: State<'_, SharedState>,
+    sessions: State<'_, std::sync::Arc<crate::pty::PtySessions>>,
+    host_id: String,
+) -> AppResult<()> {
+    // 断开前清掉该主机的所有终端会话，避免后台 task 持有死 channel
+    sessions.kill_by_host(&host_id).await;
     state.pool.remove(&host_id).await
 }
 

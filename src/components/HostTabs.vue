@@ -12,6 +12,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTabsStore } from '@/store/tabs'
 import { useHostsStore } from '@/store/hosts'
+import type { TabsPaneContext } from 'element-plus'
 
 const router = useRouter()
 const tabsStore = useTabsStore()
@@ -36,6 +37,11 @@ function onTabClick(name: string | number) {
   if (tabsStore.activeId === id) return
   tabsStore.setActive(id)
   router.push({ name: 'dashboard', params: { id } })
+}
+
+// el-tabs tab-click 事件包装：取出 paneName 再走 onTabClick
+function handleTabClick(pane: TabsPaneContext) {
+  onTabClick(pane.paneName as string)
 }
 
 // 关闭 tab（点 ×）
@@ -124,7 +130,7 @@ watch(
     >
       <el-tabs
         v-model="activeId"
-        @tab-click="(t) => onTabClick(t.paneName as string)"
+        @tab-click="handleTabClick"
         @tab-remove="onTabRemove"
       >
         <el-tab-pane

@@ -20,14 +20,19 @@ export const useHostsStore = defineStore('hosts', () => {
     loading.value = true
     try {
       hosts.value = await api.listHosts()
-      // 检查每个主机在线状态
-      for (const h of hosts.value) {
-        try {
-          onlineMap.value[h.id] = await api.isHostOnline(h.id)
-        } catch {
-          onlineMap.value[h.id] = false
-        }
-      }
+      // 并发查询每台主机在线状态（之前是串行 await，主机一多列表打开明显卡顿）
+      const results = await Promise.all(
+        hosts.value.map(async (h) => {
+          try {
+            return [h.id, await api.isHostOnline(h.id)] as const
+          } catch {
+            return [h.id, false] as const
+          }
+        }),
+      )
+      const next: Record<string, boolean> = {}
+      for (const [id, online] of results) next[id] = online
+      onlineMap.value = next
     } finally {
       loading.value = false
     }

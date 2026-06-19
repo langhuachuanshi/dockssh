@@ -3,7 +3,7 @@
  * 命名与 src-tauri/src/models.rs 对齐。
  */
 
-export type AuthType = 'password' | 'key' | 'agent'
+export type AuthType = 'password' | 'key'
 
 export interface Host {
   id: string
@@ -16,8 +16,6 @@ export interface Host {
   verify_host_key: boolean
   /** 分组名（用于列表归类，可为 null = 未分组） */
   group: string | null
-  /** 颜色标识 hex（用户手选，可为 null） */
-  color: string | null
 }
 
 export interface HostProbe {

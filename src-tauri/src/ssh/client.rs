@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, Config, Handle, Handler};
-use russh::{ChannelId, ChannelMsg};
+use russh::{ChannelId, ChannelMsg, Pty};
 use russh_keys::key;
 use russh_sftp::client::SftpSession;
 
@@ -27,8 +27,8 @@ impl Handler for ClientHandler {
         &mut self,
         _server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // 默认信任；严格的 host key 校验在 connect 前由调用方决定是否启用。
-        // 真正的指纹比对放在 connect() 里做，这里给底层库一个肯定的应答。
+        // 无条件信任服务端 host key。DockSSH 连接的是用户自己配置的主机，
+        // 不做 known_hosts 指纹比对。
         Ok(true)
     }
 }
@@ -43,10 +43,6 @@ pub struct ExecResult {
 /// 单台主机的 SSH 会话。
 pub struct SshClient {
     handle: Handle<ClientHandler>,
-    /// 连接时是否校验 host key
-    verify_host_key: bool,
-    /// 已知的服务器指纹（verify_host_key=true 时比对），None 表示不比对
-    expected_fingerprint: Option<String>,
     /// 懒加载的 SFTP 会话（首次调用 sftp() 时建立，之后复用）。
     /// SFTP 协议在单个 channel 上用 request-id 多路复用，可长期持有。
     sftp: tokio::sync::Mutex<Option<Arc<SftpSession>>>,
@@ -54,11 +50,10 @@ pub struct SshClient {
 
 impl SshClient {
     /// 建立 TCP + SSH 连接（不做认证）。认证在 `authenticate_*` 方法中完成。
-    pub async fn connect(
-        addr: &str,
-        port: u16,
-        verify_host_key: bool,
-    ) -> AppResult<Self> {
+    ///
+    /// 注：当前无条件信任服务端 host key（见 ClientHandler::check_server_key）。
+    /// DockSSH 的使用场景是连接用户自己配置的主机，不做 known_hosts 校验。
+    pub async fn connect(addr: &str, port: u16) -> AppResult<Self> {
         let mut config = Config::default();
         config.inactivity_timeout = Some(Duration::from_secs(30));
         // 关闭空闲超时反而可能导致长连接（如 logs -f）被误断，这里设大一些。
@@ -70,8 +65,6 @@ impl SshClient {
 
         Ok(Self {
             handle,
-            verify_host_key,
-            expected_fingerprint: None,
             sftp: tokio::sync::Mutex::new(None),
         })
     }
@@ -109,17 +102,6 @@ impl SshClient {
         } else {
             Err(AppError::Credential("公钥认证被拒绝".into()))
         }
-    }
-
-    /// ssh-agent 认证。
-    ///
-    /// 注：russh 的 agent 签名 API 跨版本差异大且平台相关（Windows 需 pageant，
-    /// Linux/macOS 需 ssh-agent + SSH_AUTH_SOCK）。第一版暂未实现，
-    /// 前端如选 agent 认证会返回此错误。计划 v2 用 russh-keys::agent 完整补全。
-    pub async fn auth_agent(&mut self, _user: &str) -> AppResult<()> {
-        Err(AppError::Credential(
-            "ssh-agent 认证暂未实现，请使用密码或密钥".into(),
-        ))
     }
 
     /// 执行一条命令，等待结束并收集完整输出。
@@ -220,9 +202,42 @@ impl SshClient {
         Ok((id, tx))
     }
 
-    /// 是否启用 host key 校验。
-    pub fn verify_host_key(&self) -> bool {
-        self.verify_host_key
+    /// 打开一条交互式 PTY channel（用于 `docker exec -it`）。
+    ///
+    /// 流程：开 session channel → request_pty → exec(shell)。
+    /// 返回的 Channel 由调用方持有并 spawn 双向 task：
+    /// - 读取：`channel.wait()` 拿 `ChannelMsg::Data` 转 emit
+    /// - 写入：`channel.data(&buf[..])` 把前端按键送过去
+    /// - resize：`channel.window_change(cols, rows, 0, 0)`
+    ///
+    /// 注意：channel 被 move 走后，本方法立即返回，**不持有 SshClient 的任何锁**。
+    /// 这样 pty_write 拿 channel 句柄即可，无需再经 pool 的 Mutex。
+    pub async fn open_pty_channel(
+        &mut self,
+        command: &str,
+        cols: u32,
+        rows: u32,
+    ) -> AppResult<russh::Channel<russh::client::Msg>> {
+        let channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| AppError::Ssh(format!("打开 PTY channel 失败: {e}")))?;
+
+        // 请求伪终端。TERM 固定 xterm-256color（与前端 xterm 配置一致）。
+        // terminal_modes 用空切片（禁用所有终端模式）。
+        let modes: &[(Pty, u32)] = &[];
+        channel
+            .request_pty(true, "xterm-256color", cols, rows, 0, 0, modes)
+            .await
+            .map_err(|e| AppError::Ssh(format!("请求 PTY 失败: {e}")))?;
+
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| AppError::Ssh(format!("执行交互命令失败: {e}")))?;
+
+        Ok(channel)
     }
 
     /// 获取（懒加载建立）SFTP 会话。首次调用时打开一个 channel、请求 sftp 子系统、

@@ -19,14 +19,9 @@ pub struct Host {
     pub auth_type: AuthType,
     /// 私钥路径（auth_type = Key 时有效）
     pub key_path: Option<String>,
-    /// 是否在连接时校验 host key（生产建议 true，首次可用 false）
-    pub verify_host_key: bool,
     /// 分组名（用于在主机列表里归类，可为空 = 未分组）
     #[serde(default)]
     pub group: Option<String>,
-    /// 颜色标识（内置色板索引或 hex，前端渲染用），可为空
-    #[serde(default)]
-    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -36,8 +31,6 @@ pub enum AuthType {
     Password,
     /// 私钥文件
     Key,
-    /// ssh-agent
-    Agent,
 }
 
 /// 目标机 Docker 运行环境探测结果。

@@ -23,5 +23,15 @@ dist-ssr
 *.sln
 *.sw?
 
+# Vue/Volar 编译产物（.vue / .ts 被语言服务转译生成的 .js），不应入库
+src/**/*.vue.js
+src/**/*.ts.js
+src/**/**/*.vue.js
+src/**/**/*.ts.js
+
+# 本地临时脚本/备份（dev 启动 bat、编辑辅助 ps1、文件备份等）
+.tmp-*
+*.bak-work
+
 # Windows stray artifact
 nul

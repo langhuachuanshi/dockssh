@@ -6,7 +6,6 @@
  * 上半部分（主机）：连接管理器
  * 下半部分（全局应用）：仓库 / 项目模板 / 配置 —— 不跟主机走
  */
-import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()

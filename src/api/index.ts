@@ -33,7 +33,6 @@ export interface HostInput {
   passphrase?: string
   verify_host_key: boolean
   group?: string | null
-  color?: string | null
 }
 
 export const listHosts = () => invoke<Host[]>('list_hosts')

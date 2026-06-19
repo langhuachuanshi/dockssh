@@ -2,7 +2,7 @@
 /**
  * 连接管理器：主机列表。
  *
- * - 顶部一个分组下拉筛选（全部/各分组/未分组），卡片平铺展示
+ * - 顶部一个分组下拉筛选（全部/各分组/未分组）+ 名称/IP 搜索框，卡片平铺展示
  * - 单击卡片：未连接→连接，已连接→进入概览
  * - hover 右上角 ⋯ 菜单：编辑 / 删除 / 断开
  * - 卡片显示：状态、名称、地址、OS、Docker 版本
@@ -23,11 +23,11 @@ const tabsStore = useTabsStore()
 const dialogVisible = ref(false)
 const editing = ref<Host | null>(null)
 const connecting = ref<string | null>(null)
-// 单击选中的主机 id（仅高亮，不连接）
-const selectedId = ref<string | null>(null)
 
 // 分组筛选：'' = 全部
 const groupFilter = ref('')
+// 名称/IP 搜索关键字（大小写不敏感）
+const keyword = ref('')
 
 onMounted(async () => {
   await store.refresh()
@@ -40,10 +40,18 @@ const groupOptions = computed(() => {
   return [...set]
 })
 
-// 当前筛选下的主机
+// 当前筛选 + 搜索下的主机
 const filteredHosts = computed(() => {
-  if (!groupFilter.value) return store.hosts
-  return store.hosts.filter((h) => (h.group ?? '') === groupFilter.value)
+  const g = groupFilter.value
+  const kw = keyword.value.trim().toLowerCase()
+  return store.hosts.filter((h) => {
+    if (g && (h.group ?? '') !== g) return false
+    if (kw) {
+      const hay = `${h.name}\n${h.host}\n${h.user}`.toLowerCase()
+      if (!hay.includes(kw)) return false
+    }
+    return true
+  })
 })
 
 function openCreate() {
@@ -77,15 +85,16 @@ async function remove(host: Host) {
   }
 }
 
-// 单击卡片：连接并进入
-// 单击：仅高亮选中，不连接
-function selectCard(host: Host) {
-  selectedId.value = host.id
+// 单击卡片：直接连接并进入（防重入：connect 内部已用 connecting 锁）
+function onCardClick(host: Host) {
+  connect(host)
 }
 
-// 双击卡片：连接并进入
-function onDblClick(host: Host) {
-  connect(host)
+// 卡片 ⋯ 菜单命令分发：edit / delete / disconnect
+function onCardCommand(command: string, host: Host) {
+  if (command === 'edit') openEdit(host)
+  else if (command === 'delete') remove(host)
+  else disconnect(host)
 }
 
 async function connect(host: Host) {
@@ -121,6 +130,13 @@ async function disconnect(host: Host) {
     <header class="page-header">
       <span class="subtitle">连接远程服务器管理 Docker，选择一台主机开始</span>
       <div class="header-actions">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索名称 / IP / 用户名"
+          clearable
+          :prefix-icon="Search"
+          style="width: 220px"
+        />
         <el-select
           v-model="groupFilter"
           placeholder="全部分组"
@@ -148,9 +164,8 @@ async function disconnect(host: Host) {
           v-for="h in filteredHosts"
           :key="h.id"
           class="host-card"
-          :class="{ online: store.isOnline(h.id), selected: selectedId === h.id, connecting: connecting === h.id }"
-          @click="selectCard(h)"
-          @dblclick="onDblClick(h)"
+          :class="{ online: store.isOnline(h.id), connecting: connecting === h.id }"
+          @click="onCardClick(h)"
         >
           <div class="card-top">
             <el-icon
@@ -164,7 +179,7 @@ async function disconnect(host: Host) {
             <el-dropdown
               trigger="click"
               @click.stop
-              @command="(c) => c === 'edit' ? openEdit(h) : c === 'delete' ? remove(h) : disconnect(h)"
+              @command="(c: string) => onCardCommand(c, h)"
             >
               <el-icon class="more-btn" @click.stop><MoreFilled /></el-icon>
               <template #dropdown>
@@ -195,7 +210,7 @@ async function disconnect(host: Host) {
       </div>
 
       <div v-if="!store.loading && filteredHosts.length === 0" class="empty">
-        <el-empty :description="groupFilter ? '该分组下没有主机' : '还没有主机，点击右上角添加一台'" />
+        <el-empty :description="keyword ? '没有匹配的主机' : (groupFilter ? '该分组下没有主机' : '还没有主机，点击右上角添加一台')" />
       </div>
     </div>
 
@@ -217,9 +232,10 @@ import {
   SwitchButton,
   CircleCheck,
   CircleClose,
+  Search,
 } from '@element-plus/icons-vue'
 export default {
-  components: { Plus, MoreFilled, Edit, Delete, SwitchButton, CircleCheck, CircleClose },
+  components: { Plus, MoreFilled, Edit, Delete, SwitchButton, CircleCheck, CircleClose, Search },
 }
 </script>
 
@@ -296,13 +312,6 @@ export default {
 }
 .host-card.online:hover::after {
   opacity: 0.2;
-}
-
-/* 选中态：柔和底色 + 主色细描边，无上浮（与 hover 区分） */
-.host-card.selected {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  box-shadow: 0 0 0 3px var(--el-color-primary-light-9);
 }
 
 /* 在线状态点：常驻呼吸动画 */
