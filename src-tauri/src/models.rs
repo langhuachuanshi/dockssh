@@ -170,11 +170,78 @@ pub struct ContainerMount {
     pub typ: String,
 }
 
-/// 容器 inspect 结果（仅取文件跳转需要的字段）。
+/// 容器端口映射（来自 docker inspect NetworkSettings.Ports 或 HostConfig.PortBindings）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerPortBinding {
+    /// 容器端口（如 "80/tcp"）
+    pub container_port: String,
+    /// 主机 IP（如 "0.0.0.0"）
+    pub host_ip: String,
+    /// 主机端口（如 "8080"）
+    pub host_port: String,
+}
+
+/// 容器 inspect 结果。
+///
+/// 保留 working_dir / mounts（用于「打开目录」），新增 Config / State / 网络 / 资源限制
+/// 等字段，供详情抽屉展示。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerInspect {
-    /// 容器工作目录（Config.WorkingDir）
+    // ===== 基础信息 =====
+    /// 容器 ID（完整）
+    pub id: String,
+    /// 容器名（去掉前导 /）
+    pub name: String,
+    /// 镜像
+    pub image: String,
+    /// 创建时间（RFC3339）
+    pub created: String,
+
+    // ===== Config =====
+    /// 工作目录
     pub working_dir: String,
+    /// 入口点（Entrypoint，数组）
+    pub entrypoint: Vec<String>,
+    /// 启动命令（Cmd，数组）
+    pub cmd: Vec<String>,
+    /// 环境变量（KEY=VALUE 数组）
+    pub env: Vec<String>,
+    /// 暴露端口（Config.ExposedPorts 的 key，如 "80/tcp"）
+    pub exposed_ports: Vec<String>,
+
+    // ===== State =====
+    /// 状态（running / exited / paused ...）
+    pub state: String,
+    /// 状态详情（如 "exited" 时的 ExitCode）
+    pub status: String,
+    /// 退出码（非 running 时有意义）
+    pub exit_code: i64,
+    /// 启动时间（RFC3339）
+    pub started_at: String,
+    /// 结束时间（RFC3339）
+    pub finished_at: String,
+    /// PID（宿主机进程号，running 时有意义；无法获取为 0）
+    pub pid: i64,
+
+    // ===== 网络 =====
+    /// 所属网络名（NetworkSettings.Networks 的 key 列表）
+    pub networks: Vec<String>,
+    /// IP 地址（取首个网络的 IPAddress）
+    pub ip_address: String,
+    /// 网关
+    pub gateway: String,
+    /// MAC 地址
+    pub mac_address: String,
+
+    // ===== 主机配置 =====
+    /// 重启策略（no / always / unless-stopped / on-failure）
+    pub restart_policy: String,
+    /// 重启策略为 on-failure 时的最大重试次数
+    pub restart_retries: i64,
+    /// 端口绑定列表
+    pub port_bindings: Vec<ContainerPortBinding>,
+
+    // ===== 挂载（兼容旧字段：打开目录用） =====
     /// 所有挂载
     pub mounts: Vec<ContainerMount>,
 }

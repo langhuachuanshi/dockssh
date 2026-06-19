@@ -114,8 +114,41 @@ export interface ContainerMount {
   typ: string
 }
 
+export interface ContainerPortBinding {
+  container_port: string
+  host_ip: string
+  host_port: string
+}
+
 export interface ContainerInspect {
+  // 基础
+  id: string
+  name: string
+  image: string
+  created: string
+  // Config
   working_dir: string
+  entrypoint: string[]
+  cmd: string[]
+  env: string[]
+  exposed_ports: string[]
+  // State
+  state: string
+  status: string
+  exit_code: number
+  started_at: string
+  finished_at: string
+  pid: number
+  // 网络
+  networks: string[]
+  ip_address: string
+  gateway: string
+  mac_address: string
+  // 主机配置
+  restart_policy: string
+  restart_retries: number
+  port_bindings: ContainerPortBinding[]
+  // 挂载
   mounts: ContainerMount[]
 }
 

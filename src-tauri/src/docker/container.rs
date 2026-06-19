@@ -1,12 +1,13 @@
-//! 容器相关命令：列表 / 启停 / 重启 / 删除 / 重命名。
+//! 容器相关命令：列表 / 启停 / 重启 / 删除 / 详情。
 //!
 //! 列表用 `docker ps --format '{{json .}}'`，每行一个 JSON 对象，
 //! 避免 parsing 对齐表格的脆弱性。
+//! 详情用 `docker inspect` 一次性拿完整 JSON，本地解析出前端所需字段。
 
 use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
-use crate::models::{Container, ContainerInspect, ContainerMount};
+use crate::models::{Container, ContainerInspect, ContainerMount, ContainerPortBinding};
 use crate::ssh::client::SshClient;
 
 /// docker ps 单行 JSON 的原始结构。
@@ -109,6 +110,10 @@ fn check_exit(stderr: &str, code: i32) -> AppResult<()> {
     }
 }
 
+// ===== inspect 完整解析 =====
+// docker inspect 返回的 JSON 体积大、字段多，这里只挑前端需要的子集。
+// 所有字段用 #[serde(default)] 容错，避免新版 docker 增删字段导致解析失败。
+
 /// docker inspect 单个挂载的原始结构。
 #[derive(Debug, Deserialize)]
 struct InspectMount {
@@ -120,12 +125,99 @@ struct InspectMount {
     destination: String,
 }
 
-/// 查询容器详情（用于「打开目录」跳转）。一次 exec 拿到 Mounts 与 WorkingDir。
+#[derive(Debug, Deserialize)]
+struct InspectRaw {
+    #[serde(rename = "Id", default)]
+    id: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Created", default)]
+    created: String,
+    #[serde(rename = "Image", default)]
+    image: String,
+    #[serde(default)]
+    state: InspectState,
+    #[serde(default)]
+    config: InspectConfig,
+    #[serde(default, rename = "NetworkSettings")]
+    network: InspectNetwork,
+    #[serde(default)]
+    host_config: InspectHostConfig,
+    #[serde(default)]
+    mounts: Vec<InspectMount>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InspectState {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    running: bool,
+    #[serde(default)]
+    exit_code: i64,
+    #[serde(default)]
+    pid: i64,
+    #[serde(default)]
+    started_at: String,
+    #[serde(default)]
+    finished_at: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InspectConfig {
+    #[serde(default)]
+    working_dir: String,
+    #[serde(default)]
+    entrypoint: Vec<String>,
+    #[serde(default)]
+    cmd: Vec<String>,
+    #[serde(default)]
+    env: Vec<String>,
+    #[serde(default, rename = "ExposedPorts")]
+    exposed_ports: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InspectNetwork {
+    #[serde(default, rename = "IPAddress")]
+    ip_address: String,
+    #[serde(default, rename = "Gateway")]
+    gateway: String,
+    #[serde(default, rename = "MacAddress")]
+    mac_address: String,
+    /// 真正的 IP/Gateway/MAC 在每个子网络里，顶层这几个通常为空
+    #[serde(default, rename = "Networks")]
+    networks: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InspectHostConfig {
+    #[serde(default)]
+    restart_policy: InspectRestartPolicy,
+    #[serde(default, rename = "PortBindings")]
+    port_bindings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InspectRestartPolicy {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    maximum_retry_count: i64,
+}
+
+/// 单个端口绑定的内层结构：[{ "HostIp": "0.0.0.0", "HostPort": "8080" }]
+#[derive(Debug, Deserialize)]
+struct InspectPortBindingInner {
+    #[serde(default, rename = "HostIp")]
+    host_ip: String,
+    #[serde(default, rename = "HostPort")]
+    host_port: String,
+}
+
+/// 查询容器详情。一次 `docker inspect` 拿完整 JSON，本地解析出前端所需字段。
 pub async fn inspect(client: &mut SshClient, id_or_name: &str) -> AppResult<ContainerInspect> {
-    // 用 | 分隔，左半 Mounts 的 JSON 数组，右半 WorkingDir 字符串
-    let cmd = format!(
-        "docker inspect --format '{{{{json .Mounts}}}}|{{{{.Config.WorkingDir}}}}' {id_or_name}"
-    );
+    let cmd = format!("docker inspect {id_or_name}");
     let res = client.exec(&cmd).await?;
     if res.exit_code != 0 {
         return Err(AppError::Docker(format!(
@@ -133,19 +225,112 @@ pub async fn inspect(client: &mut SshClient, id_or_name: &str) -> AppResult<Cont
             res.stderr.trim()
         )));
     }
-    let out = res.stdout.trim();
-    let (mounts_json, working_dir) = match out.split_once('|') {
-        Some((a, b)) => (a, b.to_string()),
-        None => (out, String::new()),
-    };
-    let mounts: Vec<InspectMount> = if mounts_json.is_empty() || mounts_json == "null" {
-        Vec::new()
+    // docker inspect 返回数组
+    let raws: Vec<InspectRaw> = serde_json::from_str(res.stdout.trim())
+        .map_err(|e| AppError::Parse(format!("解析 inspect 失败: {e}")))?;
+    let raw = raws
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::Docker("inspect 返回空数组".into()))?;
+
+    // 从 Networks 子节点取首个网络的 IP/Gateway/MAC（顶层通常为空）
+    let mut ip = raw.network.ip_address.clone();
+    let mut gw = raw.network.gateway.clone();
+    let mut mac = raw.network.mac_address.clone();
+    let networks: Vec<String> = raw.network.networks.keys().cloned().collect();
+    if (ip.is_empty() || gw.is_empty() || mac.is_empty()) && !raw.network.networks.is_empty() {
+        if let Some(first) = raw.network.networks.values().next() {
+            if let Some(obj) = first.as_object() {
+                if ip.is_empty() {
+                    ip = obj
+                        .get("IPAddress")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                }
+                if gw.is_empty() {
+                    gw = obj
+                        .get("Gateway")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                }
+                if mac.is_empty() {
+                    mac = obj
+                        .get("MacAddress")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    // 端口绑定：{ "80/tcp": [{HostIp, HostPort}] }
+    let mut port_bindings = Vec::new();
+    if let Some(pb) = raw.host_config.port_bindings {
+        for (cport, arr) in pb {
+            if let Some(list) = arr.as_array() {
+                for item in list {
+                    if let Ok(b) = serde_json::from_value::<InspectPortBindingInner>(item.clone()) {
+                        port_bindings.push(ContainerPortBinding {
+                            container_port: cport.clone(),
+                            host_ip: b.host_ip,
+                            host_port: b.host_port,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ExposedPorts 的 key 列表
+    let exposed_ports: Vec<String> = raw
+        .config
+        .exposed_ports
+        .as_ref()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+
+    // 名称去掉前导 /
+    let name = raw
+        .name
+        .strip_prefix('/')
+        .map(|s| s.to_string())
+        .unwrap_or(raw.name);
+
+    // status：running 时用 running 标记，否则用 state.status
+    let status = if raw.state.running {
+        "running".to_string()
     } else {
-        serde_json::from_str(mounts_json).unwrap_or_default()
+        raw.state.status.clone()
     };
+
     Ok(ContainerInspect {
-        working_dir,
-        mounts: mounts
+        id: raw.id,
+        name,
+        image: raw.image,
+        created: raw.created,
+        working_dir: raw.config.working_dir,
+        entrypoint: raw.config.entrypoint,
+        cmd: raw.config.cmd,
+        env: raw.config.env,
+        exposed_ports,
+        state: raw.state.status,
+        status,
+        exit_code: raw.state.exit_code,
+        started_at: raw.state.started_at,
+        finished_at: raw.state.finished_at,
+        pid: raw.state.pid,
+        networks,
+        ip_address: ip,
+        gateway: gw,
+        mac_address: mac,
+        restart_policy: raw.host_config.restart_policy.name,
+        restart_retries: raw.host_config.restart_policy.maximum_retry_count,
+        port_bindings,
+        mounts: raw
+            .mounts
             .into_iter()
             .map(|m| ContainerMount {
                 source: m.source,

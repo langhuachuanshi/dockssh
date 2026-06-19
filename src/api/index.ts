@@ -59,7 +59,7 @@ export const restartContainer = (hostId: string, id: string) =>
 export const removeContainer = (hostId: string, id: string, force = false) =>
   invoke<void>('remove_container', { hostId, id, force })
 
-/** 容器详情（取挂载/工作目录，用于「打开目录」） */
+/** 容器详情（完整 inspect，用于详情抽屉） */
 export const inspectContainer = (hostId: string, id: string) =>
   invoke<ContainerInspect>('inspect_container', { hostId, id })
 

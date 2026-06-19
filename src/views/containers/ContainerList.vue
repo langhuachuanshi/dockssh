@@ -4,7 +4,7 @@
  *
  * 每容器一张横向卡片，展示状态/CPU/内存/网络/端口/操作。
  * 卡片订阅 stats 流事件，按 container_id 分发最新采样。
- * 终端、详情为占位：终端提示开发中，详情弹占位抽屉。
+ * 详情为独立组件 ContainerDetail（真实 inspect + 监控曲线）。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,6 +14,7 @@ import { useHostsStore } from '@/store/hosts'
 import { useTerminalsStore } from '@/store/terminals'
 import type { Container, StatsSample } from '@/api/types'
 import ContainerCard from './ContainerCard.vue'
+import ContainerDetail from './ContainerDetail.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,15 +45,16 @@ let pollTimer: number | null = null
 let statsUnlisten: (() => void) | null = null
 const STATS_INTERVAL = 2
 
+/** 解析 docker stats 的网络字节数（如 "1.23kB" / "4.56MB" / "789B"）。
+ * docker stats 用 IEC 二进制单位但写成 kB/MB 形式，按 1024 进制换算。 */
 function parseSize(s: string): number {
-  const m = (s || '').trim().match(/^([\d.]+)\s*([kKMGTP]?B?)$/i)
+  const m = (s || '').trim().match(/^([\d.]+)\s*(K|M|G|T)?i?B?/i)
   if (!m) return 0
   const val = parseFloat(m[1])
   if (isNaN(val)) return 0
-  const unit = m[2].toUpperCase()
+  const unit = (m[2] || '').toUpperCase()
   const factor: Record<string, number> = {
-    '': 1, B: 1, KB: 1000, MB: 1_000_000, GB: 1_000_000_000,
-    TB: 1_000_000_000_000, PB: 1_000_000_000_000_000,
+    '': 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4,
   }
   return val * (factor[unit] ?? 1)
 }
@@ -71,11 +73,31 @@ const filtered = computed(() =>
 )
 
 function statsOf(c: Container): StatsSample | null {
-  return statsMap.value.get(c.id) || statsMap.value.get(c.name) || null
+  return (
+    statsMap.value.get(c.id) ||
+    statsMap.value.get(c.name) ||
+    statsMap.value.get(c.name.replace(/^\//, '')) ||
+    // 兜底：c.id 可能是 12 位短 ID，statsMap key 是 64 位完整 ID，用前缀匹配
+    findByShortId(statsMap.value, c.id)
+  )
 }
 
 function netRateOf(c: Container): { rx: number; tx: number } | null {
-  return netRateMap.value.get(c.id) || netRateMap.value.get(c.name) || null
+  return (
+    netRateMap.value.get(c.id) ||
+    netRateMap.value.get(c.name) ||
+    netRateMap.value.get(c.name.replace(/^\//, '')) ||
+    findByShortId(netRateMap.value, c.id)
+  )
+}
+
+/** 用短 ID（12 位）前缀匹配 statsMap 里的完整 ID（64 位） */
+function findByShortId<V>(map: Map<string, V>, shortId: string): V | null {
+  if (!shortId || shortId.length >= 32) return null
+  for (const [k, v] of map) {
+    if (k.startsWith(shortId) || shortId.startsWith(k)) return v
+  }
+  return null
 }
 
 async function refresh() {
@@ -122,12 +144,34 @@ function openTerminal(c: Container) {
   terminals.open(hostId.value, c.id, c.name)
 }
 
-// 详情占位抽屉
+// 详情抽屉
 const detailVisible = ref(false)
 const detailContainer = ref<Container | null>(null)
 function openDetail(c: Container) {
   detailContainer.value = c
   detailVisible.value = true
+}
+
+// 删除容器：二次确认，可选强制（运行中容器需 -f）
+async function removeContainer(c: Container) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除容器「${c.name}」？该操作不可恢复。`,
+      '删除容器',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  // 运行中容器需强制删除
+  const force = c.state === 'running'
+  try {
+    await api.removeContainer(hostId.value, c.id, force)
+    ElMessage.success(`已删除「${c.name}」`)
+    await refresh()
+  } catch (e) {
+    ElMessage.error(`删除失败：${e}`)
+  }
 }
 
 // 打开容器目录：跳转到文件管理器，路径取首个 bind 挂载源，否则工作目录
@@ -154,10 +198,14 @@ async function startStats() {
     console.error('[stats] start_stats 失败:', e)
   }
   statsUnlisten = await api.onStats(hostId.value, (s) => {
-    const key = s.container_id || s.name
-    statsMap.value.set(key, s)
+    // 同时用 container_id 和 name 作 key 存，方便卡片两种方式查找
+    // （docker ps 的 id 是 12 位短 ID，docker stats 的 container_id 是 64 位完整 ID，
+    //  精确查可能对不上，statsOf 另做前缀匹配兜底）
+    statsMap.value.set(s.container_id, s)
+    if (s.name) statsMap.value.set(s.name, s)
 
-    // 计算网络速率差分
+    // 计算网络速率差分（统一用 container_id 作逻辑 key）
+    const key = s.container_id
     const parts = (s.net_io || '').split('/')
     const rxNow = parts[0] ? parseSize(parts[0]) : 0
     const txNow = parts[1] ? parseSize(parts[1]) : 0
@@ -168,6 +216,7 @@ async function startStats() {
       const rxRate = Math.max(0, (rxNow - prev.rx) / dt)
       const txRate = Math.max(0, (txNow - prev.tx) / dt)
       netRateMap.value.set(key, { rx: rxRate, tx: txRate })
+      if (s.name) netRateMap.value.set(s.name, { rx: rxRate, tx: txRate })
     }
     netPrevMap.value.set(key, { rx: rxNow, tx: txNow, ts: now })
 
@@ -227,6 +276,7 @@ onUnmounted(() => {
           :stats="statsOf(c)"
           :net-rate="netRateOf(c)"
           @action="action"
+          @remove="removeContainer"
           @terminal="openTerminal"
           @logs="viewLogs"
           @detail="openDetail"
@@ -236,49 +286,12 @@ onUnmounted(() => {
       <el-empty v-else description="没有容器" />
     </div>
 
-    <!-- 详情占位抽屉 -->
-    <el-drawer v-model="detailVisible" title="容器详情" size="40%">
-      <template v-if="detailContainer">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="名称">{{ detailContainer.name }}</el-descriptions-item>
-          <el-descriptions-item label="ID">
-            <span class="mono">{{ detailContainer.id }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="镜像">
-            <span class="mono">{{ detailContainer.image }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">{{ detailContainer.state }}</el-descriptions-item>
-          <el-descriptions-item label="运行情况">{{ detailContainer.status }}</el-descriptions-item>
-          <el-descriptions-item label="命令">
-            <span class="mono">{{ detailContainer.command || '—' }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="Compose 项目">
-            {{ detailContainer.compose_project || '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="端口">
-            <div class="ports">
-              <el-tag
-                v-for="(p, i) in detailContainer.ports"
-                :key="i"
-                size="small"
-                type="info"
-                effect="plain"
-              >
-                {{ p }}
-              </el-tag>
-              <span v-if="!detailContainer.ports.length" class="c-dim">—</span>
-            </div>
-          </el-descriptions-item>
-        </el-descriptions>
-        <el-alert
-          type="info"
-          :closable="false"
-          title="详情页内容建设中"
-          description="当前为占位展示，后续将接入实时资源监控曲线、环境变量、挂载卷等。"
-          style="margin-top: 16px"
-        />
-      </template>
-    </el-drawer>
+    <!-- 详情抽屉 -->
+    <ContainerDetail
+      v-model="detailVisible"
+      :host-id="hostId"
+      :container="detailContainer"
+    />
   </div>
 </template>
 
@@ -315,15 +328,5 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.c-dim {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.ports {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
 }
 </style>
