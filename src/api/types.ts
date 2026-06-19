@@ -13,7 +13,6 @@ export interface Host {
   user: string
   auth_type: AuthType
   key_path: string | null
-  verify_host_key: boolean
   /** 分组名（用于列表归类，可为 null = 未分组） */
   group: string | null
 }

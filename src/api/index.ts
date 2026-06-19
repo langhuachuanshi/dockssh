@@ -31,7 +31,6 @@ export interface HostInput {
   password?: string
   /** 私钥口令（密钥认证且密钥有口令时） */
   passphrase?: string
-  verify_host_key: boolean
   group?: string | null
 }
 
@@ -197,3 +196,59 @@ export const onStats = (
   cb: (sample: StatsSample) => void,
 ): Promise<UnlistenFn> =>
   listen<StatsSample>(`dockssh://stats:${hostId}`, (e) => cb(e.payload))
+
+// ===== 终端（docker exec -it 透传）=====
+//
+// 数据流：后端 emit base64 字符串，前端解码成 Uint8Array 喂给 xterm.write。
+// 写入方向相反：xterm.onData → 字符串 → base64 → ptyWrite。
+// 用 base64 是为了完整保留任意字节（ANSI 控制序列、非 UTF-8、CJK 截断等）。
+
+/** 启动一个容器的交互式终端，返回 session_id */
+export const ptyStart = (
+  hostId: string,
+  container: string,
+  cols: number,
+  rows: number,
+  opts?: { user?: string; cwd?: string },
+) =>
+  invoke<string>('pty_start', {
+    hostId,
+    container,
+    cols,
+    rows,
+    user: opts?.user,
+    cwd: opts?.cwd,
+  })
+
+/** 写入按键（data 为 base64 编码的 bytes） */
+export const ptyWrite = (sessionId: string, data: string) =>
+  invoke<void>('pty_write', { sessionId, data })
+
+/** 通知尺寸变化（cols/rows） */
+export const ptyResize = (sessionId: string, cols: number, rows: number) =>
+  invoke<void>('pty_resize', { sessionId, cols, rows })
+
+/** 关闭并移除终端会话 */
+export const ptyKill = (sessionId: string) =>
+  invoke<void>('pty_kill', { sessionId })
+
+/** 监听终端输出（payload 为 base64 字符串），返回取消监听函数 */
+export const onPtyData = (
+  sessionId: string,
+  cb: (b64: string) => void,
+): Promise<UnlistenFn> =>
+  listen<string>(`dockssh://pty-data:${sessionId}`, (e) => cb(e.payload))
+
+/** 监听终端退出（payload 为退出码） */
+export const onPtyExit = (
+  sessionId: string,
+  cb: (code: number) => void,
+): Promise<UnlistenFn> =>
+  listen<number>(`dockssh://pty-exit:${sessionId}`, (e) => cb(e.payload))
+
+/** 监听终端错误 */
+export const onPtyError = (
+  sessionId: string,
+  cb: (msg: string) => void,
+): Promise<UnlistenFn> =>
+  listen<string>(`dockssh://pty-error:${sessionId}`, (e) => cb(e.payload))

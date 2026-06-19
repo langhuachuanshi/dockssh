@@ -18,6 +18,7 @@ import { useRoute } from 'vue-router'
 import TitleBar from '@/components/TitleBar.vue'
 import ActivityBar from '@/components/ActivityBar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
+import TerminalPanel from '@/components/TerminalPanel.vue'
 import { useHostsStore } from '@/store/hosts'
 import { useTabsStore } from '@/store/tabs'
 
@@ -52,6 +53,8 @@ onMounted(async () => {
             </keep-alive>
           </router-view>
         </div>
+        <!-- 终端面板：底部抽屉，非模态，与路由平级以保证会话保活 -->
+        <TerminalPanel />
       </div>
     </div>
   </div>

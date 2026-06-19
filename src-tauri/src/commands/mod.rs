@@ -11,6 +11,7 @@ pub mod image;
 pub mod logo;
 pub mod logs;
 pub mod network;
+pub mod pty;
 pub mod registry;
 pub mod stats;
 pub mod volume;

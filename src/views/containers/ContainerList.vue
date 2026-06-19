@@ -11,12 +11,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '@/api'
 import { useHostsStore } from '@/store/hosts'
+import { useTerminalsStore } from '@/store/terminals'
 import type { Container, StatsSample } from '@/api/types'
 import ContainerCard from './ContainerCard.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useHostsStore()
+const terminals = useTerminalsStore()
 
 const hostId = computed(() => route.params.id as string)
 
@@ -115,9 +117,9 @@ function viewLogs(c: Container) {
   })
 }
 
-// 终端占位：exec 后端尚未实现
+// 打开容器终端：复用语义——已开则激活，未开则新建（后端会话由 Terminal.vue 建立）
 function openTerminal(c: Container) {
-  ElMessage.info(`「${c.name}」终端功能开发中`)
+  terminals.open(hostId.value, c.id, c.name)
 }
 
 // 详情占位抽屉

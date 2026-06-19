@@ -39,7 +39,13 @@ const selected = ref<Set<string>>(new Set()) // 存 name
 // ===== 视图与排序 =====
 type ViewMode = 'large' | 'detail'
 type SortKey = 'name' | 'modified' | 'size' | 'type'
-const viewMode = ref<ViewMode>('detail')
+// 视图模式持久化到 localStorage，避免切走再回来又被重置成默认
+// 默认大图标视图（更直观），用户手动切到列表后记住选择
+const VIEW_STORAGE_KEY = 'dockssh:file-view-mode'
+const viewMode = ref<ViewMode>(
+  (localStorage.getItem(VIEW_STORAGE_KEY) as ViewMode) || 'large',
+)
+watch(viewMode, (m) => localStorage.setItem(VIEW_STORAGE_KEY, m))
 const sortKey = ref<SortKey>('name')
 const sortAsc = ref(true)
 
@@ -55,8 +61,21 @@ const previewLoading = ref(false)
 // ===== 重命名/新建内联输入 =====
 const renamingName = ref<string | null>(null) // 正在重命名的条目名
 const renamingValue = ref('')
-const newFolderEditing = ref(false) // 是否在新建文件夹内联输入
-const newFolderValue = ref('')
+// 是否正在新建文件夹（内联命名态）
+const creating = ref(false)
+const creatingValue = ref('')
+// 临时项输入框引用（大图标/列表两个视图共用一个 ref，谁渲染谁挂载）
+const creatingInputRef = ref<HTMLInputElement | null>(null)
+
+// 生成不重名的默认名（Windows 风格）：新建文件夹 / 新建文件夹 (2) ...
+function defaultName(): string {
+  const base = '新建文件夹'
+  const existing = new Set(entries.value.map((e) => e.name))
+  if (!existing.has(base)) return base
+  let i = 2
+  while (existing.has(`${base} (${i})`)) i++
+  return `${base} (${i})`
+}
 
 // ===== 路径输入框 =====
 const pathEditing = ref(false)
@@ -157,7 +176,7 @@ async function openDir(path: string, push = true) {
   loading.value = true
   selected.value = new Set()
   renamingName.value = null
-  newFolderEditing.value = false
+  creating.value = false
   try {
     const listing: DirListing = await api.listDir(hostId.value, path)
     currentPath.value = listing.path
@@ -270,22 +289,39 @@ function clearSelection() {
   if (selected.value.size) selected.value = new Set()
 }
 
-// ===== 文件操作 =====
-function newFolder() {
-  newFolderEditing.value = true
-  newFolderValue.value = '新建文件夹'
+// ===== 新建（文件夹 / 文件） =====
+/** 开始新建文件夹：插入临时项 + 聚焦输入框 + 选中默认名 */
+function startCreate() {
+  creating.value = true
+  creatingValue.value = defaultName()
+  selected.value = new Set()
 }
-async function commitNewFolder() {
-  const name = newFolderValue.value.trim()
-  newFolderEditing.value = false
+
+// 新建临时项出现时自动聚焦 + 全选默认名（Windows 行为）
+watch(creating, (c) => {
+  if (!c) return
+  nextTick(() => {
+    const el = creatingInputRef.value
+    if (!el) return
+    el.focus()
+    el.select()
+  })
+})
+async function commitCreate() {
+  const name = creatingValue.value.trim()
+  creating.value = false
   if (!name) return
+  const fullPath = joinPath(currentPath.value, name)
   try {
-    await api.fileMkdir(hostId.value, joinPath(currentPath.value, name))
+    await api.fileMkdir(hostId.value, fullPath)
     ElMessage.success('已创建')
     await refresh()
   } catch (e) {
     ElMessage.error(`创建失败：${e}`)
   }
+}
+function cancelCreate() {
+  creating.value = false
 }
 
 function startRename(e: FileEntry) {
@@ -484,7 +520,7 @@ onMounted(init)
     <div class="toolbar">
       <div class="left-tools">
         <el-button :icon="Upload" size="small" @click="upload">上传</el-button>
-        <el-button :icon="FolderAdd" size="small" @click="newFolder">新建文件夹</el-button>
+        <el-button :icon="FolderAdd" size="small" @click="startCreate()">新建文件夹</el-button>
         <el-button :icon="Download" size="small" :disabled="!selectedEntries.length" @click="downloadSelected">下载</el-button>
         <el-button :icon="Delete" size="small" type="danger" :disabled="!selectedEntries.length" @click="removeSelected">删除</el-button>
         <!-- 更多：重命名/上一级/打开路径编辑 等次要操作收进下拉 -->
@@ -529,6 +565,19 @@ onMounted(init)
 
       <!-- 大图标视图 -->
       <div v-else-if="viewMode === 'large'" class="icon-grid" @mousedown="clearSelection">
+        <!-- 新建文件夹临时项 -->
+        <div v-if="creating" class="icon-cell creating">
+          <FileIcon name="" :is-dir="true" :size="56" />
+          <input
+            ref="creatingInputRef"
+            v-model="creatingValue"
+            class="rename-input native-input"
+            @mousedown.stop
+            @keyup.enter="commitCreate"
+            @keyup.esc="cancelCreate"
+            @blur="commitCreate"
+          />
+        </div>
         <div
           v-for="e in filtered"
           :key="e.name"
@@ -554,23 +603,6 @@ onMounted(init)
 
       <!-- 详细列表视图 -->
       <div v-else class="detail-view" @mousedown="clearSelection">
-        <!-- 新建文件夹内联行 -->
-        <div v-if="newFolderEditing" class="detail-row new-folder-row">
-          <span class="col-icon"><FileIcon name="" :is-dir="true" :size="20" /></span>
-          <span class="col-name">
-            <el-input
-              v-model="newFolderValue"
-              size="small"
-              autofocus
-              @keyup.enter="commitNewFolder"
-              @blur="commitNewFolder"
-            />
-          </span>
-          <span class="col-date"></span>
-          <span class="col-type">文件夹</span>
-          <span class="col-size"></span>
-        </div>
-
         <div class="detail-header">
           <span class="col-name sortable" @click="toggleSort('name')">
             名称
@@ -591,6 +623,24 @@ onMounted(init)
         </div>
 
         <div class="detail-body">
+          <!-- 新建文件夹临时行，对齐表头列 -->
+          <div v-if="creating" class="detail-row creating-row">
+            <span class="col-icon"><FileIcon name="" :is-dir="true" :size="20" /></span>
+            <span class="col-name">
+              <input
+                ref="creatingInputRef"
+                v-model="creatingValue"
+                class="native-input"
+                @mousedown.stop
+                @keyup.enter="commitCreate"
+                @keyup.esc="cancelCreate"
+                @blur="commitCreate"
+              />
+            </span>
+            <span class="col-date"></span>
+            <span class="col-type">文件夹</span>
+            <span class="col-size"></span>
+          </div>
           <div
             v-for="e in filtered"
             :key="e.name"
@@ -813,6 +863,10 @@ export default {
   background: var(--el-color-primary-light-9);
   outline: 1px solid var(--el-color-primary-light-5);
 }
+.icon-cell.creating {
+  background: var(--el-color-primary-light-9);
+  outline: 1px solid var(--el-color-primary-light-5);
+}
 .icon-name {
   font-size: 12px;
   text-align: center;
@@ -821,6 +875,22 @@ export default {
   line-height: 1.3;
 }
 .rename-input { width: 88px; }
+
+/* 原生输入框（新建临时项用，避免 el-input 在小尺寸下样式问题） */
+.native-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 140px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  border: 1px solid var(--el-color-primary);
+  border-radius: 3px;
+  outline: none;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+}
+.icon-cell .native-input { width: 88px; text-align: center; }
 
 /* 详细列表视图 */
 .detail-view {
@@ -874,7 +944,7 @@ export default {
 .detail-row.selected {
   background: var(--el-color-primary-light-9);
 }
-.new-folder-row { background: var(--el-fill-color); }
+.creating-row { background: var(--el-fill-color); }
 
 /* 状态栏 */
 .statusbar {

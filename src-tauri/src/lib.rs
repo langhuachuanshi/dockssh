@@ -16,6 +16,7 @@ use tauri::Manager;
 
 use commands::logs::LogHandles;
 use commands::stats::StatsHandles;
+use pty::PtySessions;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,6 +44,7 @@ pub fn run() {
             handle.manage(state);
             handle.manage(Arc::new(LogHandles::default()));
             handle.manage(Arc::new(StatsHandles::default()));
+            handle.manage(Arc::new(PtySessions::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -100,6 +102,11 @@ pub fn run() {
             // stats
             commands::stats::start_stats,
             commands::stats::stop_stats,
+            // 终端（docker exec -it 透传）
+            commands::pty::pty_start,
+            commands::pty::pty_write,
+            commands::pty::pty_resize,
+            commands::pty::pty_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

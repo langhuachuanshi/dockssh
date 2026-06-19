@@ -12,7 +12,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '@/api'
-import { useHostsStore } from '@/store/hosts'
+import { useTerminalsStore } from '@/store/terminals'
 import type { ComposeProject, Container } from '@/api/types'
 import ContainerCard from '@/views/containers/ContainerCard.vue'
 
@@ -27,7 +27,7 @@ const emit = defineEmits<{
 }>()
 
 const route = useRoute()
-const store = useHostsStore()
+const terminals = useTerminalsStore()
 const hostId = computed(() => route.params.id as string)
 
 const visible = computed({
@@ -91,9 +91,9 @@ function openDir(c: Container) {
   ElMessage.info(`「${c.name}」目录打开请在容器列表页操作`)
 }
 
-// 终端尚未实现（与容器页一致）
+// 打开容器终端（与容器列表页一致的复用语义）
 function openTerminal(c: Container) {
-  ElMessage.info(`「${c.name}」终端功能开发中`)
+  terminals.open(hostId.value, c.id, c.name)
 }
 
 // 容器的日志/详情按钮 → 切到本项目日志 tab
