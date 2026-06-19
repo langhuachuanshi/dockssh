@@ -20,6 +20,7 @@ use commands::stats::StatsHandles;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -58,9 +59,41 @@ pub fn run() {
             commands::container::stop_container,
             commands::container::restart_container,
             commands::container::remove_container,
+            commands::container::inspect_container,
             // 镜像
             commands::image::list_images,
             commands::image::remove_image,
+            // 网络
+            commands::network::list_networks,
+            // 存储卷
+            commands::volume::list_volumes,
+            commands::volume::inspect_volume,
+            commands::volume::remove_volume,
+            // 编排（compose）
+            commands::compose::list_compose_projects,
+            commands::compose::read_compose_file,
+            commands::compose::save_compose_file,
+            commands::compose::down_compose_project,
+            commands::compose::build_compose_project,
+            commands::compose::up_compose_project,
+            commands::compose::stop_compose_project,
+            commands::compose::restart_compose_project,
+            // 仓库（registry）
+            commands::registry::list_registries,
+            // 镜像 logo 缓存
+            commands::logo::get_cached_logo,
+            commands::logo::fetch_logo,
+            commands::logo::delete_cached_logo,
+            commands::logo::clear_logo_cache,
+            // 文件管理（SFTP）
+            commands::files::file_home,
+            commands::files::list_dir,
+            commands::files::file_read_text,
+            commands::files::file_mkdir,
+            commands::files::file_remove,
+            commands::files::file_rename,
+            commands::files::file_download,
+            commands::files::file_upload,
             // 日志
             commands::logs::start_logs,
             commands::logs::stop_logs,

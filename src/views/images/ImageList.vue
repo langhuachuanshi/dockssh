@@ -68,7 +68,12 @@ onMounted(async () => {
         clearable
         style="width: 280px"
       />
-      <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+      <div class="toolbar-right">
+        <el-tooltip content="拉取镜像功能开发中" placement="top">
+          <el-button :icon="Download" disabled>拉取镜像</el-button>
+        </el-tooltip>
+        <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+      </div>
     </div>
 
     <div class="table-wrap" v-loading="loading">
@@ -113,8 +118,8 @@ onMounted(async () => {
 </template>
 
 <script lang="ts">
-import { Search, Refresh, Delete } from '@element-plus/icons-vue'
-export default { components: { Search, Refresh, Delete } }
+import { Search, Refresh, Delete, Download } from '@element-plus/icons-vue'
+export default { name: 'ImageList', components: { Search, Refresh, Delete, Download } }
 </script>
 
 <style scoped>
@@ -130,6 +135,11 @@ export default { components: { Search, Refresh, Delete } }
   justify-content: space-between;
   padding: 12px 24px;
   border-bottom: 1px solid var(--el-border-color);
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .table-wrap {
   flex: 1;

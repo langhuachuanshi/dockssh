@@ -10,7 +10,7 @@ use crate::models::{AuthType, Host, HostProbe};
 use crate::ssh::client::SshClient;
 use crate::state::SharedState;
 
-/// 新增/更新主机时前端传的载荷（密码可选，仅在用户填写时携带）。
+/// 新增/更新主机时前端传的载荷（密码/口令可选，仅在用户填写时携带）。
 #[derive(Debug, Deserialize)]
 pub struct HostInput {
     pub id: Option<String>,
@@ -21,7 +21,13 @@ pub struct HostInput {
     pub auth_type: AuthType,
     pub key_path: Option<String>,
     pub password: Option<String>,
+    /// 私钥口令（auth_type = Key 且密钥有口令时填写）
+    pub passphrase: Option<String>,
     pub verify_host_key: bool,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// 列出所有主机（不含密码）。
@@ -42,8 +48,12 @@ pub async fn save_host(state: State<'_, SharedState>, input: HostInput) -> AppRe
         auth_type: input.auth_type,
         key_path: input.key_path,
         verify_host_key: input.verify_host_key,
+        group: input.group,
+        color: input.color,
     };
-    state.upsert_host(host.clone(), input.password).await?;
+    state
+        .upsert_host(host.clone(), input.password, input.passphrase)
+        .await?;
     Ok(host)
 }
 
@@ -77,7 +87,11 @@ pub async fn connect_host(
             let path = host
                 .key_path
                 .ok_or_else(|| crate::error::AppError::Credential("未配置私钥路径".into()))?;
-            client.auth_publickey(&host.user, &path).await?;
+            // 口令可能未设置（无口令私钥），读取失败时按 None 处理
+            let passphrase = crypto::load_passphrase(&host.id).ok();
+            client
+                .auth_publickey(&host.user, &path, passphrase.as_deref())
+                .await?;
         }
         AuthType::Agent => {
             client.auth_agent(&host.user).await?;

@@ -1,38 +1,40 @@
 <script setup lang="ts">
 /**
- * 应用根布局：常驻三段结构。
- * ┌─────────────────────────────────┐
- * │           自定义标题栏            │  TitleBar
- * ├──────────┬──────────────────────┤
- * │          │     顶部工具条         │  TopBar
- * │   侧栏    ├──────────────────────┤
- * │ (主机+导航)│                      │
- * │          │     内容区 router-view │
- * └──────────┴──────────────────────┘
+ * 应用根布局：tabs 现在并入标题栏，省掉一行高度。
+ * ┌──────────────────────────────────────────┐
+ * │ ▣ DockSSH │ ┌prod×┐ staging×      - □ × │  TitleBar(含 tabs)
+ * ├────┬──────┬──────────────────────────────┤
+ * │    │      │                              │
+ * │轨道│ 导航栏│       内容区 router-view      │
+ * │    │      │                              │
+ * └────┴──────┴──────────────────────────────┘
+ * - 活动栏(轨道)常驻，放「连接管理器」入口
+ * - tabs 已移入标题栏（HostTabs 组件），由 TitleBar 控制
+ * - 导航栏仅在已选中主机(路由带 :id)时显示
+ * - 主机管理页(/hosts)时只有轨道 + 内容区，铺满
  */
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import TitleBar from '@/components/TitleBar.vue'
+import ActivityBar from '@/components/ActivityBar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
-import AppTopBar from '@/components/AppTopBar.vue'
 import { useHostsStore } from '@/store/hosts'
+import { useTabsStore } from '@/store/tabs'
 
 const route = useRoute()
 const store = useHostsStore()
+const tabsStore = useTabsStore()
 
-// 顶部工具条显示的标题（按当前路由名映射）
-const pageTitle = computed(() => {
-  const map: Record<string, string> = {
-    dashboard: '概览',
-    containers: '容器',
-    'container-logs': '容器日志',
-    images: '镜像',
+// 当前路由是否选中了某台主机（导航栏显示依据）
+const hasHostContext = computed(() => !!route.params.id)
+
+onMounted(async () => {
+  await store.refresh()
+  // 刷新后若路由指向某主机，把它补进 tabs（保持 tabs 一致）
+  const id = route.params.id as string | undefined
+  if (id && !tabsStore.tabs.includes(id)) {
+    tabsStore.open(id)
   }
-  return map[route.name as string] || 'DockSSH'
-})
-
-onMounted(() => {
-  store.refresh()
 })
 </script>
 
@@ -40,11 +42,15 @@ onMounted(() => {
   <div class="app-shell">
     <TitleBar />
     <div class="body">
-      <AppSidebar />
+      <ActivityBar />
+      <AppSidebar v-if="hasHostContext" />
       <div class="main">
-        <AppTopBar :title="pageTitle" />
         <div class="content">
-          <router-view />
+          <router-view v-slot="{ Component, route }">
+            <keep-alive :include="['DashboardView', 'ContainerList', 'ImageList']">
+              <component :is="Component" :key="route.fullPath" />
+            </keep-alive>
+          </router-view>
         </div>
       </div>
     </div>

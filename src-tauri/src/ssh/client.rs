@@ -11,6 +11,7 @@ use std::time::Duration;
 use russh::client::{self, Config, Handle, Handler};
 use russh::{ChannelId, ChannelMsg};
 use russh_keys::key;
+use russh_sftp::client::SftpSession;
 
 use crate::error::{AppError, AppResult};
 
@@ -46,6 +47,9 @@ pub struct SshClient {
     verify_host_key: bool,
     /// 已知的服务器指纹（verify_host_key=true 时比对），None 表示不比对
     expected_fingerprint: Option<String>,
+    /// 懒加载的 SFTP 会话（首次调用 sftp() 时建立，之后复用）。
+    /// SFTP 协议在单个 channel 上用 request-id 多路复用，可长期持有。
+    sftp: tokio::sync::Mutex<Option<Arc<SftpSession>>>,
 }
 
 impl SshClient {
@@ -68,6 +72,7 @@ impl SshClient {
             handle,
             verify_host_key,
             expected_fingerprint: None,
+            sftp: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -85,9 +90,14 @@ impl SshClient {
         }
     }
 
-    /// 公钥认证。
-    pub async fn auth_publickey(&mut self, user: &str, key_path: &str) -> AppResult<()> {
-        let key_pair = russh_keys::load_secret_key(key_path, None)
+    /// 公钥认证。可选传入私钥口令(passphrase)。
+    pub async fn auth_publickey(
+        &mut self,
+        user: &str,
+        key_path: &str,
+        passphrase: Option<&str>,
+    ) -> AppResult<()> {
+        let key_pair = russh_keys::load_secret_key(key_path, passphrase)
             .map_err(|e| AppError::Credential(format!("读取私钥失败: {e}")))?;
         let ok = self
             .handle
@@ -213,6 +223,34 @@ impl SshClient {
     /// 是否启用 host key 校验。
     pub fn verify_host_key(&self) -> bool {
         self.verify_host_key
+    }
+
+    /// 获取（懒加载建立）SFTP 会话。首次调用时打开一个 channel、请求 sftp 子系统、
+    /// 建立 SftpSession 并缓存；后续直接返回克隆的 Arc。
+    ///
+    /// SftpSession 的所有方法都是 `&self`，内部在单个 channel 上多路复用，
+    /// 因此可以安全地用 Arc 共享给多个 command 并发使用。
+    pub async fn sftp(&self) -> AppResult<Arc<SftpSession>> {
+        let mut guard = self.sftp.lock().await;
+        if let Some(s) = guard.as_ref() {
+            return Ok(s.clone());
+        }
+        // 建立 SFTP channel：session channel → 请求 sftp subsystem → 转 stream → 建会话
+        let channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| AppError::Ssh(format!("打开 SFTP channel 失败: {e}")))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| AppError::Ssh(format!("请求 sftp 子系统失败: {e}")))?;
+        let session = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| AppError::Ssh(format!("建立 SFTP 会话失败: {e}")))?;
+        let arc = Arc::new(session);
+        *guard = Some(arc.clone());
+        Ok(arc)
     }
 
     /// 关闭会话。

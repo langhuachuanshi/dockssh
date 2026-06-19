@@ -6,7 +6,7 @@
 use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
-use crate::models::Container;
+use crate::models::{Container, ContainerInspect, ContainerMount};
 use crate::ssh::client::SshClient;
 
 /// docker ps 单行 JSON 的原始结构。
@@ -107,4 +107,51 @@ fn check_exit(stderr: &str, code: i32) -> AppResult<()> {
             stderr.trim()
         )))
     }
+}
+
+/// docker inspect 单个挂载的原始结构。
+#[derive(Debug, Deserialize)]
+struct InspectMount {
+    #[serde(rename = "Type", default)]
+    typ: String,
+    #[serde(rename = "Source", default)]
+    source: String,
+    #[serde(rename = "Destination", default)]
+    destination: String,
+}
+
+/// 查询容器详情（用于「打开目录」跳转）。一次 exec 拿到 Mounts 与 WorkingDir。
+pub async fn inspect(client: &mut SshClient, id_or_name: &str) -> AppResult<ContainerInspect> {
+    // 用 | 分隔，左半 Mounts 的 JSON 数组，右半 WorkingDir 字符串
+    let cmd = format!(
+        "docker inspect --format '{{{{json .Mounts}}}}|{{{{.Config.WorkingDir}}}}' {id_or_name}"
+    );
+    let res = client.exec(&cmd).await?;
+    if res.exit_code != 0 {
+        return Err(AppError::Docker(format!(
+            "inspect 失败: {}",
+            res.stderr.trim()
+        )));
+    }
+    let out = res.stdout.trim();
+    let (mounts_json, working_dir) = match out.split_once('|') {
+        Some((a, b)) => (a, b.to_string()),
+        None => (out, String::new()),
+    };
+    let mounts: Vec<InspectMount> = if mounts_json.is_empty() || mounts_json == "null" {
+        Vec::new()
+    } else {
+        serde_json::from_str(mounts_json).unwrap_or_default()
+    };
+    Ok(ContainerInspect {
+        working_dir,
+        mounts: mounts
+            .into_iter()
+            .map(|m| ContainerMount {
+                source: m.source,
+                destination: m.destination,
+                typ: m.typ,
+            })
+            .collect(),
+    })
 }

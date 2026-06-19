@@ -33,15 +33,21 @@ pub async fn start_stats(
 
     let arc = state.pool.get(&host_id).await?;
     let event = format!("dockssh://stats:{host_id}");
+    let raw_event = format!("dockssh://stats-raw:{host_id}");
     let mut client = arc.lock().await;
 
     let (_id, tx) = client
         .exec_stream(&cmd, move |chunk| {
             let app = app.clone();
             let evt = event.clone();
+            let raw_evt = raw_event.clone();
             if let Ok(s) = std::str::from_utf8(&chunk) {
                 // 每行一个 JSON，可能一次拿到多行
                 for line in s.lines() {
+                    // 诊断：把原始行（含无法解析的 stderr/表头）转发到 raw 事件
+                    if !line.trim().is_empty() {
+                        let _ = app.emit(&raw_evt, line.to_string());
+                    }
                     if let Some(sample) = dstats::parse_line(line) {
                         let _ = app.emit(&evt, &sample);
                     }

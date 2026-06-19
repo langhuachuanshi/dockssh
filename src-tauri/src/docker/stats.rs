@@ -77,12 +77,10 @@ pub async fn snapshot(client: &mut SshClient) -> AppResult<Vec<StatsSample>> {
 }
 
 /// 构造流式 stats 命令（每 N 秒一行 JSON）。
+///
+/// docker stats 默认持续流式输出（约 1 次/秒），`--interval` 在部分旧版/精简发行版
+/// 不被支持（会报 Usage 错误），因此不传 interval，靠默认刷新即可。
 /// docker 的 Go template 要求双大括号 {{ }}，用 raw 字符串避免转义混乱。
-pub fn build_stream_cmd(interval_secs: u64) -> String {
-    let interval = if interval_secs == 0 {
-        String::new()
-    } else {
-        format!("--interval {interval_secs}")
-    };
-    format!("docker stats {interval} --format '{{{{json .}}}}'")
+pub fn build_stream_cmd(_interval_secs: u64) -> String {
+    format!("docker stats --format '{{{{json .}}}}'")
 }

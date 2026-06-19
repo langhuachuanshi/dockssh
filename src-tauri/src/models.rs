@@ -21,6 +21,12 @@ pub struct Host {
     pub key_path: Option<String>,
     /// 是否在连接时校验 host key（生产建议 true，首次可用 false）
     pub verify_host_key: bool,
+    /// 分组名（用于在主机列表里归类，可为空 = 未分组）
+    #[serde(default)]
+    pub group: Option<String>,
+    /// 颜色标识（内置色板索引或 hex，前端渲染用），可为空
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -77,6 +83,43 @@ pub struct Image {
     pub created: String,
 }
 
+/// 网络摘要（来自 docker network ls）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+}
+
+/// 存储卷摘要（来自 docker volume ls + volume inspect）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Volume {
+    pub driver: String,
+    pub name: String,
+    /// 卷在宿主机上的挂载点绝对路径（volume inspect 的 Mountpoint），无则空串
+    #[serde(default)]
+    pub mountpoint: String,
+    /// 创建时间（docker 输出的 CreatedAt 原样回传，如 "2024-01-01 12:00:00 +0800 CST"），无则空串
+    #[serde(default)]
+    pub created: String,
+}
+
+/// compose 项目摘要（来自扫描容器 labels）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComposeProject {
+    pub name: String,
+    /// 容器总数
+    pub containers: usize,
+    /// 运行中容器数量
+    pub running: usize,
+    /// 最早容器的创建时间（docker 输出的 CreatedAt 原样回传）
+    pub created: String,
+    /// compose 文件绝对路径（来自 label com.docker.compose.project.config_files）。
+    /// 组内各容器该值通常一致；取第一条；缺失时为 None。
+    pub config_files: Option<String>,
+}
+
 /// 单次 docker stats 采样。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StatsSample {
@@ -95,4 +138,57 @@ pub struct StatsSample {
 pub struct TermSize {
     pub cols: u16,
     pub rows: u16,
+}
+
+/// 单个文件/目录条目（来自 SFTP read_dir）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// 名称
+    pub name: String,
+    /// 是否目录
+    pub is_dir: bool,
+    /// 是否符号链接
+    pub is_symlink: bool,
+    /// 字节数（目录为 0）
+    pub size: u64,
+    /// 最后修改时间（unix 秒），无则 None
+    pub modified: Option<i64>,
+    /// 权限串，如 "rwxr-xr-x"，无则 None
+    pub permissions: Option<String>,
+}
+
+/// 目录列表结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirListing {
+    /// 规范化后的绝对路径
+    pub path: String,
+    /// 条目列表（已排序：目录在前，同类按名称）
+    pub entries: Vec<FileEntry>,
+}
+
+/// 容器单个挂载（来自 docker inspect Mounts）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerMount {
+    /// 宿主机路径（bind 类型才有意义）
+    pub source: String,
+    /// 容器内路径
+    pub destination: String,
+    /// 挂载类型：bind / volume / tmpfs ...
+    pub typ: String,
+}
+
+/// 容器 inspect 结果（仅取文件跳转需要的字段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerInspect {
+    /// 容器工作目录（Config.WorkingDir）
+    pub working_dir: String,
+    /// 所有挂载
+    pub mounts: Vec<ContainerMount>,
+}
+
+/// 存储卷 inspect 结果（仅取文件跳转需要的字段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolumeInspect {
+    /// 卷在宿主机上的挂载点绝对路径
+    pub mountpoint: String,
 }

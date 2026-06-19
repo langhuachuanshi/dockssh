@@ -1,10 +1,18 @@
 <script setup lang="ts">
+/**
+ * 容器列表页（仅卡片视图）。
+ *
+ * 每容器一张横向卡片，展示状态/CPU/内存/网络/端口/操作。
+ * 卡片订阅 stats 流事件，按 container_id 分发最新采样。
+ * 终端、详情为占位：终端提示开发中，详情弹占位抽屉。
+ */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '@/api'
 import { useHostsStore } from '@/store/hosts'
-import type { Container } from '@/api/types'
+import type { Container, StatsSample } from '@/api/types'
+import ContainerCard from './ContainerCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,7 +25,35 @@ const loading = ref(false)
 const search = ref('')
 const onlyRunning = ref(false)
 
+// 最新 stats 采样，按 container_id（若无则 name）索引
+const statsMap = ref<Map<string, StatsSample>>(new Map())
+
+// 网络速率差分：按容器保存上次累计字节 + 时间戳
+interface NetPrev {
+  rx: number
+  tx: number
+  ts: number
+}
+const netPrevMap = ref<Map<string, NetPrev>>(new Map())
+// 每容器最近一次计算出的速率（字节/秒）
+const netRateMap = ref<Map<string, { rx: number; tx: number }>>(new Map())
+
 let pollTimer: number | null = null
+let statsUnlisten: (() => void) | null = null
+const STATS_INTERVAL = 2
+
+function parseSize(s: string): number {
+  const m = (s || '').trim().match(/^([\d.]+)\s*([kKMGTP]?B?)$/i)
+  if (!m) return 0
+  const val = parseFloat(m[1])
+  if (isNaN(val)) return 0
+  const unit = m[2].toUpperCase()
+  const factor: Record<string, number> = {
+    '': 1, B: 1, KB: 1000, MB: 1_000_000, GB: 1_000_000_000,
+    TB: 1_000_000_000_000, PB: 1_000_000_000_000_000,
+  }
+  return val * (factor[unit] ?? 1)
+}
 
 const filtered = computed(() =>
   containers.value.filter((c) => {
@@ -32,6 +68,14 @@ const filtered = computed(() =>
   }),
 )
 
+function statsOf(c: Container): StatsSample | null {
+  return statsMap.value.get(c.id) || statsMap.value.get(c.name) || null
+}
+
+function netRateOf(c: Container): { rx: number; tx: number } | null {
+  return netRateMap.value.get(c.id) || netRateMap.value.get(c.name) || null
+}
+
 async function refresh() {
   loading.value = true
   try {
@@ -44,27 +88,22 @@ async function refresh() {
 }
 
 async function action(kind: 'start' | 'stop' | 'restart', c: Container) {
+  const actionName = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '重启'
+  try {
+    await ElMessageBox.confirm(`确认${actionName}容器「${c.name}」？`, '操作确认', {
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   try {
     if (kind === 'start') await api.startContainer(hostId.value, c.id)
     else if (kind === 'stop') await api.stopContainer(hostId.value, c.id)
     else await api.restartContainer(hostId.value, c.id)
-    ElMessage.success(`已${kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '重启'}`)
+    ElMessage.success(`已${actionName}`)
     await refresh()
   } catch (e) {
     ElMessage.error(`操作失败：${e}`)
-  }
-}
-
-async function remove(c: Container) {
-  try {
-    await ElMessageBox.confirm(`确认删除容器「${c.name}」？`, '删除确认', {
-      type: 'warning',
-    })
-    await api.removeContainer(hostId.value, c.id, true)
-    ElMessage.success('已删除')
-    await refresh()
-  } catch {
-    /* cancel */
   }
 }
 
@@ -76,17 +115,85 @@ function viewLogs(c: Container) {
   })
 }
 
-function stateTag(s: string) {
-  return s === 'running' ? 'success' : 'info'
+// 终端占位：exec 后端尚未实现
+function openTerminal(c: Container) {
+  ElMessage.info(`「${c.name}」终端功能开发中`)
+}
+
+// 详情占位抽屉
+const detailVisible = ref(false)
+const detailContainer = ref<Container | null>(null)
+function openDetail(c: Container) {
+  detailContainer.value = c
+  detailVisible.value = true
+}
+
+// 打开容器目录：跳转到文件管理器，路径取首个 bind 挂载源，否则工作目录
+async function openDir(c: Container) {
+  try {
+    const info = await api.inspectContainer(hostId.value, c.id)
+    const bind = info.mounts.find((m) => m.typ === 'bind' && m.source)
+    const path = bind?.source || info.working_dir
+    if (!path) {
+      ElMessage.info(`「${c.name}」无可定位的宿主机目录（无 bind 挂载/工作目录）`)
+      return
+    }
+    router.push({ name: 'files', params: { id: hostId.value }, query: { path } })
+  } catch (e) {
+    ElMessage.error(`打开目录失败：${e}`)
+  }
+}
+
+// ===== stats 订阅 =====
+async function startStats() {
+  try {
+    await api.startStats(hostId.value, STATS_INTERVAL)
+  } catch (e) {
+    console.error('[stats] start_stats 失败:', e)
+  }
+  statsUnlisten = await api.onStats(hostId.value, (s) => {
+    const key = s.container_id || s.name
+    statsMap.value.set(key, s)
+
+    // 计算网络速率差分
+    const parts = (s.net_io || '').split('/')
+    const rxNow = parts[0] ? parseSize(parts[0]) : 0
+    const txNow = parts[1] ? parseSize(parts[1]) : 0
+    const now = Date.now()
+    const prev = netPrevMap.value.get(key)
+    if (prev && now > prev.ts) {
+      const dt = (now - prev.ts) / 1000
+      const rxRate = Math.max(0, (rxNow - prev.rx) / dt)
+      const txRate = Math.max(0, (txNow - prev.tx) / dt)
+      netRateMap.value.set(key, { rx: rxRate, tx: txRate })
+    }
+    netPrevMap.value.set(key, { rx: rxNow, tx: txNow, ts: now })
+
+    // 触发响应式：重新赋值 Map
+    statsMap.value = new Map(statsMap.value)
+    netRateMap.value = new Map(netRateMap.value)
+    netPrevMap.value = new Map(netPrevMap.value)
+  })
+}
+
+function stopStats() {
+  statsUnlisten?.()
+  statsUnlisten = null
+  statsMap.value.clear()
+  netPrevMap.value.clear()
+  netRateMap.value.clear()
+  api.stopStats(hostId.value).catch(() => {})
 }
 
 onMounted(async () => {
   await store.ensureConnected(hostId.value)
-  refresh()
+  await refresh()
+  await startStats()
   pollTimer = window.setInterval(refresh, 8000)
 })
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  stopStats()
 })
 </script>
 
@@ -103,86 +210,81 @@ onUnmounted(() => {
         />
         <el-checkbox v-model="onlyRunning">仅运行中</el-checkbox>
       </div>
-      <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+      <div class="flex gap-12 flex-center">
+        <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+      </div>
     </div>
 
-    <div class="table-wrap" v-loading="loading">
-      <el-table :data="filtered" size="default" height="100%">
-        <el-table-column label="名称" min-width="180">
-          <template #default="{ row }">
-            <el-link type="primary" :underline="false" @click="viewLogs(row)">
-              {{ row.name }}
-            </el-link>
-          </template>
-        </el-table-column>
-        <el-table-column label="镜像" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="mono c-dim">{{ row.image }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="110">
-          <template #default="{ row }">
-            <el-tag :type="stateTag(row.state)" size="small" effect="dark">
-              {{ row.state }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="运行情况" min-width="130">
-          <template #default="{ row }">
-            <span class="c-dim">{{ row.status }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="端口" min-width="180">
-          <template #default="{ row }">
+    <!-- 卡片视图 -->
+    <div class="card-wrap" v-loading="loading">
+      <div v-if="filtered.length" class="card-grid">
+        <ContainerCard
+          v-for="c in filtered"
+          :key="c.id"
+          :container="c"
+          :stats="statsOf(c)"
+          :net-rate="netRateOf(c)"
+          @action="action"
+          @terminal="openTerminal"
+          @logs="viewLogs"
+          @detail="openDetail"
+          @open-dir="openDir"
+        />
+      </div>
+      <el-empty v-else description="没有容器" />
+    </div>
+
+    <!-- 详情占位抽屉 -->
+    <el-drawer v-model="detailVisible" title="容器详情" size="40%">
+      <template v-if="detailContainer">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="名称">{{ detailContainer.name }}</el-descriptions-item>
+          <el-descriptions-item label="ID">
+            <span class="mono">{{ detailContainer.id }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="镜像">
+            <span class="mono">{{ detailContainer.image }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">{{ detailContainer.state }}</el-descriptions-item>
+          <el-descriptions-item label="运行情况">{{ detailContainer.status }}</el-descriptions-item>
+          <el-descriptions-item label="命令">
+            <span class="mono">{{ detailContainer.command || '—' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="Compose 项目">
+            {{ detailContainer.compose_project || '—' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="端口">
             <div class="ports">
-              <el-tag v-for="(p, i) in row.ports" :key="i" size="small" type="info" effect="plain">
+              <el-tag
+                v-for="(p, i) in detailContainer.ports"
+                :key="i"
+                size="small"
+                type="info"
+                effect="plain"
+              >
                 {{ p }}
               </el-tag>
-              <span v-if="!row.ports.length" class="c-dim">—</span>
+              <span v-if="!detailContainer.ports.length" class="c-dim">—</span>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
-            <el-button-group>
-              <el-button
-                v-if="row.state !== 'running'"
-                size="small"
-                :icon="VideoPlay"
-                @click="action('start', row)"
-              />
-              <el-button
-                v-else
-                size="small"
-                :icon="VideoPause"
-                @click="action('stop', row)"
-              />
-              <el-button size="small" :icon="RefreshRight" @click="action('restart', row)" />
-              <el-button size="small" :icon="Document" @click="viewLogs(row)" />
-              <el-button size="small" type="danger" :icon="Delete" @click="remove(row)" />
-            </el-button-group>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <el-empty description="没有容器" />
-        </template>
-      </el-table>
-    </div>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-alert
+          type="info"
+          :closable="false"
+          title="详情页内容建设中"
+          description="当前为占位展示，后续将接入实时资源监控曲线、环境变量、挂载卷等。"
+          style="margin-top: 16px"
+        />
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script lang="ts">
-import {
-  Search,
-  Refresh,
-  VideoPlay,
-  VideoPause,
-  RefreshRight,
-  Document,
-  Delete,
-} from '@element-plus/icons-vue'
+import { Search, Refresh } from '@element-plus/icons-vue'
 export default {
-  components: { Search, Refresh, VideoPlay, VideoPause, RefreshRight, Document, Delete },
+  name: 'ContainerList',
+  components: { Search, Refresh },
 }
 </script>
 
@@ -200,11 +302,19 @@ export default {
   padding: 12px 24px;
   border-bottom: 1px solid var(--el-border-color);
 }
-.table-wrap {
+
+/* 卡片视图 */
+.card-wrap {
   flex: 1;
-  padding: 0 24px 16px;
-  overflow: hidden;
+  padding: 16px 24px;
+  overflow: auto;
 }
+.card-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .c-dim {
   color: var(--el-text-color-secondary);
   font-size: 12px;

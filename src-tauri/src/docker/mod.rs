@@ -8,5 +8,8 @@ pub mod container;
 pub mod detect;
 pub mod image;
 pub mod logs;
+pub mod network;
 pub mod parse;
+pub mod registry;
 pub mod stats;
+pub mod volume;

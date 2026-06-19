@@ -50,6 +50,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # 命令执行辅助
 uuid = { version = "1", features = ["v4"] }
 once_cell = "1"
+tauri-plugin-dialog = "2.7.1"
+
+# HTTP 客户端（iconify logo 兜底下载）
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [features]
 # 此 feature 用于自定义协议

@@ -62,8 +62,13 @@ impl AppState {
         Ok(())
     }
 
-    /// 新增/更新主机（按 id 匹配）。可选写入密码到密钥环。
-    pub async fn upsert_host(&self, host: Host, password: Option<String>) -> AppResult<()> {
+    /// 新增/更新主机（按 id 匹配）。可选写入密码/私钥口令到密钥环。
+    pub async fn upsert_host(
+        &self,
+        host: Host,
+        password: Option<String>,
+        passphrase: Option<String>,
+    ) -> AppResult<()> {
         {
             let mut hosts = self.hosts.write().await;
             if let Some(existing) = hosts.iter_mut().find(|h| h.id == host.id) {
@@ -74,6 +79,9 @@ impl AppState {
         }
         if let Some(pwd) = password {
             crypto::save_password(&host.id, &pwd)?;
+        }
+        if let Some(pass) = passphrase {
+            crypto::save_passphrase(&host.id, &pass)?;
         }
         self.save().await
     }
@@ -86,6 +94,7 @@ impl AppState {
         }
         self.probes.write().await.remove(host_id);
         let _ = crypto::delete_password(host_id);
+        let _ = crypto::delete_passphrase(host_id);
         let _ = self.pool.remove(host_id).await;
         self.save().await
     }

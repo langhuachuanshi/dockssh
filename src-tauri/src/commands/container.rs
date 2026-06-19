@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::docker::container as dc;
 use crate::error::AppResult;
-use crate::models::Container;
+use crate::models::{Container, ContainerInspect};
 use crate::state::SharedState;
 
 #[tauri::command]
@@ -45,4 +45,16 @@ pub async fn remove_container(
     let arc = state.pool.get(&host_id).await?;
     let mut client = arc.lock().await;
     dc::remove(&mut client, &id, force.unwrap_or(false)).await
+}
+
+/// 容器详情（用于「打开目录」：取 bind 挂载源路径或工作目录）。
+#[tauri::command]
+pub async fn inspect_container(
+    state: State<'_, SharedState>,
+    host_id: String,
+    id: String,
+) -> AppResult<ContainerInspect> {
+    let arc = state.pool.get(&host_id).await?;
+    let mut client = arc.lock().await;
+    dc::inspect(&mut client, &id).await
 }
