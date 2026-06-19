@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useHostsStore } from '@/store/hosts'
 import { useTabsStore } from '@/store/tabs'
+import { useTerminalsStore } from '@/store/terminals'
 import * as api from '@/api'
 import type { Host } from '@/api/types'
 import HostFormDialog from './HostFormDialog.vue'
@@ -19,6 +20,7 @@ import HostFormDialog from './HostFormDialog.vue'
 const router = useRouter()
 const store = useHostsStore()
 const tabsStore = useTabsStore()
+const terminalsStore = useTerminalsStore()
 
 const dialogVisible = ref(false)
 const editing = ref<Host | null>(null)
@@ -190,6 +192,8 @@ async function connect(host: Host) {
 async function disconnect(host: Host) {
   try {
     await store.disconnect(host.id)
+    // 同步清理该主机下所有终端 tab（断开 SSH 后 PTY 会话已失效）
+    await terminalsStore.closeByHost(host.id).catch(() => {})
     ElMessage.success('已断开')
   } catch (e) {
     ElMessage.error(`断开失败：${e}`)

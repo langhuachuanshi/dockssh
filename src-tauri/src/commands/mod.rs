@@ -15,3 +15,4 @@ pub mod pty;
 pub mod registry;
 pub mod stats;
 pub mod volume;
+pub mod window;

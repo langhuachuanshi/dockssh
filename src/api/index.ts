@@ -232,6 +232,23 @@ export const ptyResize = (sessionId: string, cols: number, rows: number) =>
 export const ptyKill = (sessionId: string) =>
   invoke<void>('pty_kill', { sessionId })
 
+/** 把某终端「投递」到独立终端窗口（单例，带 tabs）。
+ *  主窗口应先 detach（保留后端 session）再调用。
+ *  sessionId: 后端 PTY 会话 id；title: 容器名（tab 标题）。
+ *  后端把终端推入待投递队列，并确保独立窗口存在。 */
+export const attachTerminal = (sessionId: string, title: string) =>
+  invoke<void>('attach_terminal', { sessionId, name: title })
+
+/** 独立窗口加载完成后拉取所有待投递的终端（取出并清空队列）。 */
+export const takePendingTerminals = () =>
+  invoke<Array<{ session_id: string; name: string }>>('take_pending_terminals')
+
+/** 监听「有新终端可拉取」通知（空 payload 信号），收到后调 takePendingTerminals。 */
+export const onAttachTerminalNotify = (
+  cb: () => void,
+): Promise<UnlistenFn> =>
+  listen('dockssh://attach-terminal', () => cb())
+
 /** 监听终端输出（payload 为 base64 字符串），返回取消监听函数 */
 export const onPtyData = (
   sessionId: string,

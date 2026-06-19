@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "DockSSH 默认权限：核心 + 窗口控制（自定义标题栏需要）",
+  "description": "DockSSH 默认权限：核心 + 窗口控制（自定义标题栏需要）。windows 含 terminal-* 通配，让独立终端窗口也能调用命令。",
   "windows": [
-    "main"
+    "main",
+    "terminal-*"
   ],
   "permissions": [
     "core:default",
@@ -14,6 +15,10 @@
     "core:window:allow-start-dragging",
     "core:window:allow-close",
     "core:window:allow-destroy",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
     "dialog:default",
     "dialog:allow-open"
   ]

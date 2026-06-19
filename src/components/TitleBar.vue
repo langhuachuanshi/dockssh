@@ -2,11 +2,12 @@
 /**
  * 自定义标题栏（高度 48）。
  * 三段结构：左 logo + 中 tabs + 右窗口按钮。
- * - logo 区与 tabs 间隙区可拖动移动窗口（data-tauri-drag-region）
- * - tabs 嵌入标题栏中部，tab 本身不标记 drag，确保可点击
- * - 按钮放在非 drag 容器里，确保点击不被拖动拦截
  *
- * 拖动机制：Tauri v2 会把带 data-tauri-drag-region 的元素作为拖动热区。
+ * 拖动机制（双重保险）：
+ * 1. data-tauri-drag-region：Tauri 原生拖动热区，logo 区与 tabs 空白区都用
+ * 2. onTabsAreaMouseDown：el-tabs 内部 DOM 可能撑满盖住 drag region，
+ *    用 JS 兜底——鼠标按下 tabs-area 时，若命中的不是 tab 项本身，
+ *    则调用 startDragging() 主动触发拖窗。点击 tab 不受影响。
  */
 import { computed } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -29,6 +30,26 @@ async function toggleMaximize() {
 async function close() {
   await win.close()
 }
+
+/**
+ * tabs-area 鼠标按下兜底拖窗。
+ * el-tabs 的内部容器（__header / __nav-wrap）会撑满整个 tabs-area，
+ * 盖住父级的 data-tauri-drag-region，导致空白处拖不动。
+ * 这里判断：若点击的不是 tab 项（.el-tabs__item）及其子元素，
+ * 就主动 startDragging()，确保 tab 间空白与两侧空白都能拖动窗口。
+ * 仅响应主键（button===0），避免右键菜单被吞。
+ */
+async function onTabsAreaMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return
+  const target = e.target as HTMLElement | null
+  // 命中 tab 项本身（含关闭×、状态点等子元素）则不拖动，交给 el-tabs 处理
+  if (target?.closest('.el-tabs__item')) return
+  try {
+    await win.startDragging()
+  } catch {
+    /* 拖动失败忽略（可能权限或平台差异） */
+  }
+}
 </script>
 
 <template>
@@ -39,8 +60,13 @@ async function close() {
       <span class="name">DockSSH</span>
     </div>
 
-    <!-- 中：tabs（有 tab 时显示，否则该区可拖动作空白热区） -->
-    <div class="tabs-area">
+    <!-- 中：tabs。data-tauri-drag-region 标原生热区；onTabsAreaMouseDown
+         兜底处理 el-tabs 撑满盖住热区的情况，确保空白处始终可拖窗。 -->
+    <div
+      class="tabs-area"
+      data-tauri-drag-region
+      @mousedown="onTabsAreaMouseDown"
+    >
       <HostTabs v-if="hasTabs" />
       <div v-else class="tabs-empty" data-tauri-drag-region />
     </div>
@@ -88,7 +114,9 @@ export default { components: { Box, Minus, FullScreen, Close } }
   font-size: 18px;
   color: var(--el-color-primary);
 }
-/* tabs 区：占满中间，有 tab 时放 tabs，无 tab 时作拖动热区 */
+/* tabs 区：占满中间，整个标记为窗口拖动热区。HostTabs 只占内容宽度，
+   两侧及 tab 间空白透出此 drag region 实现拖窗；tab 点击/关闭/排序
+   因 tab 元素自身无 drag 属性而不受影响。 */
 .tabs-area {
   flex: 1;
   min-width: 0;

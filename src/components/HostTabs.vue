@@ -12,11 +12,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTabsStore } from '@/store/tabs'
 import { useHostsStore } from '@/store/hosts'
+import { useTerminalsStore } from '@/store/terminals'
 import type { TabsPaneContext } from 'element-plus'
 
 const router = useRouter()
 const tabsStore = useTabsStore()
 const hostsStore = useHostsStore()
+const terminalsStore = useTerminalsStore()
 
 // el-tabs v-model 绑定当前激活的 host id
 const activeId = computed<string>({
@@ -48,13 +50,18 @@ function handleTabClick(pane: TabsPaneContext) {
 // 产品决策：dockssh 的 tab 与 SSH 连接 1:1，关 tab = 断开连接，
 // 避免 SSH 会话泄漏（后端 pool 留死会话）。后端 pool.remove 对不存在的会话容错，
 // 所以无需先判断 isOnline，直接 disconnect 即可。
+// 同步清理该主机下所有终端 tab（store.close 会销毁后端 PTY 会话）。
 function onTabRemove(name: string | number) {
   const id = String(name)
   const next = tabsStore.close(id)
-  // 后台断开连接，不阻塞 UI（失败仅记录，不打扰用户）
+  // 后台断开连接 + 清理终端，不阻塞 UI（失败仅记录，不打扰用户）
   hostsStore.disconnect(id).catch((e) => {
     // eslint-disable-next-line no-console
     console.warn(`关闭标签时断开主机 ${id} 失败:`, e)
+  })
+  terminalsStore.closeByHost(id).catch((e) => {
+    // eslint-disable-next-line no-console
+    console.warn(`关闭标签时清理主机 ${id} 终端失败:`, e)
   })
   if (next) {
     router.push({ name: 'dashboard', params: { id: next } })
@@ -165,21 +172,22 @@ watch(
 
 <style scoped>
 .host-tabs {
-  flex: 1;
+  /* 不再 flex:1 撑满父级，只占内容宽度，留出空白让父级
+     tabs-area 的 drag region 透出，实现窗口拖动。 */
   min-width: 0;
   display: flex;
   align-items: stretch;
   background: transparent;
 }
 .tabs-nav-host {
-  flex: 1;
+  /* 自适应内容宽度，不撑满，让 tabs-area 空白处可拖窗 */
   min-width: 0;
   display: flex;
 }
-/* el-tabs header 高度填满标题栏（48px），tab 底部对齐 */
+/* el-tabs header 高度填满标题栏（48px），tab 底部对齐。
+   宽度自适应内容（去掉 width:100%），否则 el-tabs 会撑满父级盖住 drag region。 */
 .host-tabs :deep(.el-tabs) {
   --el-tabs-header-height: 48px;
-  width: 100%;
 }
 .host-tabs :deep(.el-tabs__header) {
   margin: 0;

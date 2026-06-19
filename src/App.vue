@@ -21,13 +21,40 @@ import AppSidebar from '@/components/AppSidebar.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import { useHostsStore } from '@/store/hosts'
 import { useTabsStore } from '@/store/tabs'
+import { useTerminalsStore } from '@/store/terminals'
 
 const route = useRoute()
 const store = useHostsStore()
 const tabsStore = useTabsStore()
+const terminalsStore = useTerminalsStore()
 
 // 当前路由是否选中了某台主机（导航栏显示依据）
 const hasHostContext = computed(() => !!route.params.id)
+
+/**
+ * 是否是独立终端窗口（后端 open_terminal_window 创建的 WebviewWindow）。
+ * 独立窗口加载 /terminal-window/:sessionId 路由，应是「全屏单终端」，
+ * 不渲染主窗口的标题栏/轨道/导航/终端面板等全局布局。
+ */
+const isTerminalWindow = computed(() => route.name === 'terminal-window')
+
+/**
+ * 主区（.main）的 flex-direction 随终端面板停靠方向切换：
+ * - bottom → column   （content 上，panel 下）
+ * - right  → row      （content 左，panel 右）
+ * - left   → row-reverse（panel 左，content 右）
+ * DOM 顺序固定为 content 在前、TerminalPanel 在后，靠 flex-direction 控制左右。
+ */
+const mainDirection = computed(() => {
+  switch (terminalsStore.dockSide) {
+    case 'left':
+      return 'row-reverse'
+    case 'right':
+      return 'row'
+    default:
+      return 'column'
+  }
+})
 
 onMounted(async () => {
   await store.refresh()
@@ -40,12 +67,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <!-- 独立终端窗口：全屏单终端，不套主窗口布局 -->
+  <router-view v-if="isTerminalWindow" />
+
+  <!-- 主窗口布局 -->
+  <div v-else class="app-shell">
     <TitleBar />
     <div class="body">
       <ActivityBar />
       <AppSidebar v-if="hasHostContext" />
-      <div class="main">
+      <div class="main" :style="{ flexDirection: mainDirection }">
         <div class="content">
           <router-view v-slot="{ Component, route }">
             <keep-alive :include="['DashboardView', 'ContainerList', 'ImageList']">
@@ -75,7 +106,7 @@ onMounted(async () => {
 .main {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  /* flex-direction 由 mainDirection（停靠方向）动态绑定，不在此硬编码 */
   overflow: hidden;
 }
 .content {

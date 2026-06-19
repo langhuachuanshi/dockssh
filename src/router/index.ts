@@ -15,6 +15,12 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/hosts' },
     {
+      // 独立终端窗口（带 tabs，承接主窗口投递的终端）
+      path: '/terminal-window',
+      name: 'terminal-window',
+      component: () => import('@/views/terminal/TerminalWindowView.vue'),
+    },
+    {
       path: '/hosts',
       name: 'hosts',
       component: () => import('@/views/hosts/HostList.vue'),

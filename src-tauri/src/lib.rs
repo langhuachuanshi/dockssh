@@ -16,6 +16,7 @@ use tauri::Manager;
 
 use commands::logs::LogHandles;
 use commands::stats::StatsHandles;
+use commands::window::PendingTerminals;
 use pty::PtySessions;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -45,6 +46,7 @@ pub fn run() {
             handle.manage(Arc::new(LogHandles::default()));
             handle.manage(Arc::new(StatsHandles::default()));
             handle.manage(Arc::new(PtySessions::default()));
+            handle.manage(Arc::new(PendingTerminals::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -107,6 +109,9 @@ pub fn run() {
             commands::pty::pty_write,
             commands::pty::pty_resize,
             commands::pty::pty_kill,
+            // 窗口
+            commands::window::attach_terminal,
+            commands::window::take_pending_terminals,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
