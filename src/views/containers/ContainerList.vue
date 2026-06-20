@@ -15,6 +15,7 @@ import { useTerminalsStore } from '@/store/terminals'
 import type { Container, StatsSample } from '@/api/types'
 import ContainerCard from './ContainerCard.vue'
 import ContainerDetail from './ContainerDetail.vue'
+import CreateContainerDialog from './CreateContainerDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -202,6 +203,12 @@ function openDetail(c: Container) {
   detailVisible.value = true
 }
 
+// 创建容器向导
+const createVisible = ref(false)
+function openCreate() {
+  createVisible.value = true
+}
+
 // 删除容器：二次确认，可选强制（运行中容器需 -f）
 async function removeContainer(c: Container) {
   try {
@@ -373,6 +380,7 @@ onBeforeUnmount(() => {
         <el-checkbox v-model="onlyRunning">仅运行中</el-checkbox>
       </div>
       <div class="flex gap-12 flex-center">
+        <el-button :icon="Plus" type="primary" @click="openCreate">新建容器</el-button>
         <el-button :icon="Refresh" @click="refresh">刷新</el-button>
       </div>
     </div>
@@ -406,14 +414,21 @@ onBeforeUnmount(() => {
       @action="action"
       @rename="renameContainer"
     />
+
+    <!-- 创建容器向导 -->
+    <CreateContainerDialog
+      v-model="createVisible"
+      :host-id="hostId"
+      :on-created="refresh"
+    />
   </div>
 </template>
 
 <script lang="ts">
-import { Search, Refresh } from '@element-plus/icons-vue'
+import { Search, Refresh, Plus } from '@element-plus/icons-vue'
 export default {
   name: 'ContainerList',
-  components: { Search, Refresh },
+  components: { Search, Refresh, Plus },
 }
 </script>
 

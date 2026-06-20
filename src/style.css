@@ -4,6 +4,27 @@
  * 禁止在此自定义设计系统变量或组件级样式。
  */
 
+/* 阿里巴巴普惠体 3.0 Regular（本地化，不走 CDN） */
+@font-face {
+  font-family: 'AlibabaPuHuiTi';
+  src: url('./assets/fonts/AlibabaPuHuiTi-3-0-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * 正文字体变量：普惠体优先，缺失时回退到系统中文字体。
+ * 等宽字体（终端/日志/代码）不使用此变量，保持 JetBrains Mono 等系统等宽字体。
+ */
+:root {
+  --dsh-font-sans: 'AlibabaPuHuiTi', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Roboto, Helvetica, Arial,
+    sans-serif;
+  /* Element Plus 文字字体统一走普惠体 */
+  --el-font-family: var(--dsh-font-sans);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -18,8 +39,7 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--dsh-font-sans);
   font-size: 14px;
   overflow: hidden;
 }
