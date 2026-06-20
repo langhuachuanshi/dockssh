@@ -158,6 +158,33 @@ export interface VolumeInspect {
   mountpoint: string
 }
 
+// ===== 创建容器 =====
+
+export interface PortMapping {
+  host: string
+  container: string
+  protocol: string
+}
+
+export interface VolumeMount {
+  host: string
+  container: string
+  readOnly: boolean
+}
+
+export interface CreateContainerOpts {
+  image: string
+  name: string
+  command: string
+  ports: PortMapping[]
+  envs: string[]
+  volumes: VolumeMount[]
+  restartPolicy: string
+  network: string
+  cpuLimit: string
+  memLimit: string
+}
+
 // ===== 日志 =====
 
 /** 日志数据块，携带来源流标签（stdout/stderr）。 */

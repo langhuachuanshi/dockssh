@@ -79,6 +79,60 @@ pub struct Image {
     pub created: String,
 }
 
+/// 端口映射（-p host:container[/protocol]）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PortMapping {
+    pub host: String,
+    pub container: String,
+    /// tcp / udp，空则不指定（默认 tcp）
+    #[serde(default)]
+    pub protocol: String,
+}
+
+/// 卷挂载（-v host:container[:ro]）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VolumeMount {
+    pub host: String,
+    pub container: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// 创建容器的参数（对应 docker run 的各项）。
+/// 所有可选字段为空时省略对应 flag，交给 docker 用默认值。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateContainerOpts {
+    /// 镜像（必填，如 "nginx:latest"）
+    pub image: String,
+    /// 容器名
+    #[serde(default)]
+    pub name: String,
+    /// 覆盖启动命令（CMD），整体作为一个字符串
+    #[serde(default)]
+    pub command: String,
+    /// 端口映射列表
+    #[serde(default)]
+    pub ports: Vec<PortMapping>,
+    /// 环境变量列表（"KEY=VALUE"）
+    #[serde(default)]
+    pub envs: Vec<String>,
+    /// 卷挂载列表
+    #[serde(default)]
+    pub volumes: Vec<VolumeMount>,
+    /// 重启策略：no / always / unless-stopped / on-failure
+    #[serde(default)]
+    pub restart_policy: String,
+    /// 网络（--network）
+    #[serde(default)]
+    pub network: String,
+    /// CPU 限制（核数，如 "1.5"）。空表示不限制。
+    #[serde(default)]
+    pub cpu_limit: String,
+    /// 内存限制（如 "512m" / "1g"）。空表示不限制。
+    #[serde(default)]
+    pub mem_limit: String,
+}
+
 /// 网络摘要（来自 docker network ls）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Network {

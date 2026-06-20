@@ -65,8 +65,11 @@ async function loadContainers() {
 }
 
 // ===== 容器操作（转发给现有 container API，完成后刷新本列表 + 通知外层） =====
-async function containerAction(kind: 'start' | 'stop' | 'restart', c: Container) {
-  const actionName = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '重启'
+async function containerAction(kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause', c: Container) {
+  const names: Record<string, string> = {
+    start: '启动', stop: '停止', restart: '重启', pause: '暂停', unpause: '恢复',
+  }
+  const actionName = names[kind]
   try {
     await ElMessageBox.confirm(`确认${actionName}容器「${c.name}」？`, '操作确认', {
       type: 'warning',
@@ -77,7 +80,9 @@ async function containerAction(kind: 'start' | 'stop' | 'restart', c: Container)
   try {
     if (kind === 'start') await api.startContainer(hostId.value, c.id)
     else if (kind === 'stop') await api.stopContainer(hostId.value, c.id)
-    else await api.restartContainer(hostId.value, c.id)
+    else if (kind === 'restart') await api.restartContainer(hostId.value, c.id)
+    else if (kind === 'pause') await api.pauseContainer(hostId.value, c.id)
+    else if (kind === 'unpause') await api.unpauseContainer(hostId.value, c.id)
     ElMessage.success(`已${actionName}`)
     await loadContainers()
     emit('refreshed')

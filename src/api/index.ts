@@ -9,6 +9,7 @@ import type {
   Container,
   ContainerInspect,
   ConnectResult,
+  CreateContainerOpts,
   DirListing,
   Host,
   Image,
@@ -57,12 +58,22 @@ export const stopContainer = (hostId: string, id: string) =>
   invoke<void>('stop_container', { hostId, id })
 export const restartContainer = (hostId: string, id: string) =>
   invoke<void>('restart_container', { hostId, id })
+export const pauseContainer = (hostId: string, id: string) =>
+  invoke<void>('pause_container', { hostId, id })
+export const unpauseContainer = (hostId: string, id: string) =>
+  invoke<void>('unpause_container', { hostId, id })
+export const renameContainer = (hostId: string, id: string, newName: string) =>
+  invoke<void>('rename_container', { hostId, id, newName })
 export const removeContainer = (hostId: string, id: string, force = false) =>
   invoke<void>('remove_container', { hostId, id, force })
 
 /** 容器详情（完整 inspect，用于详情抽屉） */
 export const inspectContainer = (hostId: string, id: string) =>
   invoke<ContainerInspect>('inspect_container', { hostId, id })
+
+/** 创建并启动容器（docker run -d）。返回新容器 ID。 */
+export const createContainer = (hostId: string, opts: CreateContainerOpts) =>
+  invoke<string>('create_and_run_container', { hostId, opts })
 
 // ===== 镜像 =====
 

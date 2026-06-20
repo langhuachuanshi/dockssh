@@ -7,7 +7,7 @@
 use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
-use crate::models::{Container, ContainerInspect, ContainerMount, ContainerPortBinding};
+use crate::models::{Container, ContainerInspect, ContainerMount, ContainerPortBinding, CreateContainerOpts};
 use crate::ssh::client::SshClient;
 
 /// docker ps 单行 JSON 的原始结构。
@@ -93,6 +93,30 @@ pub async fn restart(client: &mut SshClient, id_or_name: &str) -> AppResult<()> 
     check_exit(&res.stderr, res.exit_code)
 }
 
+/// 暂停容器（冻结进程，内存保留）。
+pub async fn pause(client: &mut SshClient, id_or_name: &str) -> AppResult<()> {
+    let res = client
+        .exec(&format!("docker pause {id_or_name}"))
+        .await?;
+    check_exit(&res.stderr, res.exit_code)
+}
+
+/// 恢复暂停的容器。
+pub async fn unpause(client: &mut SshClient, id_or_name: &str) -> AppResult<()> {
+    let res = client
+        .exec(&format!("docker unpause {id_or_name}"))
+        .await?;
+    check_exit(&res.stderr, res.exit_code)
+}
+
+/// 重命名容器。new_name 已在上层做过校验（见 rename_container 命令）。
+pub async fn rename(client: &mut SshClient, id_or_name: &str, new_name: &str) -> AppResult<()> {
+    let res = client
+        .exec(&format!("docker rename {id_or_name} {new_name}"))
+        .await?;
+    check_exit(&res.stderr, res.exit_code)
+}
+
 /// 删除容器（默认强制 -f，C 端工具行为；如需温和删除前端可加确认）。
 pub async fn remove(client: &mut SshClient, id_or_name: &str, force: bool) -> AppResult<()> {
     let flag = if force { " -f" } else { "" };
@@ -100,6 +124,115 @@ pub async fn remove(client: &mut SshClient, id_or_name: &str, force: bool) -> Ap
         .exec(&format!("docker rm{flag} {id_or_name}"))
         .await?;
     check_exit(&res.stderr, res.exit_code)
+}
+
+/// 把一个值做 shell 单引号转义，防注入。
+/// 策略：用单引号包裹，内部单引号用 '\'' 中断+转义+恢复。
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 创建并启动容器（docker run -d）。
+/// 返回新容器的 ID（docker run 成功时 stdout 第一行）。
+///
+/// 所有可选参数为空/默认时省略对应 flag，交给 docker 用默认值。
+pub async fn create_and_run(client: &mut SshClient, opts: &CreateContainerOpts) -> AppResult<String> {
+    if opts.image.trim().is_empty() {
+        return Err(AppError::Other("镜像名不能为空".into()));
+    }
+
+    let mut parts = vec!["docker run -d".to_string()];
+
+    // 容器名
+    let name = opts.name.trim();
+    if !name.is_empty() {
+        parts.push(format!("--name {}", shell_quote(name)));
+    }
+
+    // 重启策略
+    let policy = opts.restart_policy.trim();
+    if !policy.is_empty() && policy != "no" {
+        parts.push(format!("--restart {policy}"));
+    }
+
+    // 网络
+    let network = opts.network.trim();
+    if !network.is_empty() {
+        parts.push(format!("--network {}", shell_quote(network)));
+    }
+
+    // 端口映射
+    for p in &opts.ports {
+        let host = p.host.trim();
+        let container = p.container.trim();
+        if container.is_empty() {
+            continue;
+        }
+        let proto = p.protocol.trim();
+        let suffix = if proto.is_empty() { String::new() } else { format!("/{proto}") };
+        if host.is_empty() {
+            parts.push(format!("-p {container}{suffix}"));
+        } else {
+            parts.push(format!("-p {host}:{container}{suffix}"));
+        }
+    }
+
+    // 卷挂载
+    for v in &opts.volumes {
+        let host = v.host.trim();
+        let container = v.container.trim();
+        if host.is_empty() || container.is_empty() {
+            continue;
+        }
+        let ro = if v.read_only { ":ro" } else { "" };
+        parts.push(format!("-v {}:{}{ro}", shell_quote(host), shell_quote(container)));
+    }
+
+    // 环境变量
+    for e in &opts.envs {
+        let e = e.trim();
+        if e.is_empty() {
+            continue;
+        }
+        parts.push(format!("-e {}", shell_quote(e)));
+    }
+
+    // CPU 限制（核数，如 1.5 → --cpus=1.5）
+    let cpu = opts.cpu_limit.trim();
+    if !cpu.is_empty() {
+        parts.push(format!("--cpus={cpu}"));
+    }
+
+    // 内存限制（如 512m / 1g）
+    let mem = opts.mem_limit.trim();
+    if !mem.is_empty() {
+        parts.push(format!("--memory={mem}"));
+    }
+
+    // 镜像（必填）
+    parts.push(shell_quote(&opts.image));
+
+    // 覆盖命令
+    let cmd = opts.command.trim();
+    if !cmd.is_empty() {
+        parts.push(shell_quote(cmd));
+    }
+
+    let cmd = parts.join(" ");
+    let res = client.exec(&cmd).await?;
+    if res.exit_code != 0 {
+        return Err(AppError::Docker(format!(
+            "退出码 {}: {}",
+            res.exit_code,
+            res.stderr.trim()
+        )));
+    }
+    // stdout 第一行是容器 ID（64 位完整 ID）
+    let id = res.stdout.lines().next().unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return Err(AppError::Docker("docker run 成功但未返回容器 ID".into()));
+    }
+    Ok(id)
 }
 
 fn check_exit(stderr: &str, code: i32) -> AppResult<()> {

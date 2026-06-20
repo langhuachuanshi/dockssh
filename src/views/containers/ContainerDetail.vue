@@ -29,7 +29,11 @@ const props = withDefaults(
   { hostId: '' },
 )
 
-const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
+const emit = defineEmits<{
+  (e: 'update:modelValue', v: boolean): void
+  (e: 'action', kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause', c: Container): void
+  (e: 'rename', c: Container): void
+}>()
 
 const visible = computed({
   get: () => props.modelValue,
@@ -187,10 +191,46 @@ const mounts = computed(() => inspect.value?.mounts || [])
 const envList = computed(() => inspect.value?.env || [])
 const entrypoint = computed(() => inspect.value?.entrypoint.filter(Boolean).join(' ') || '—')
 const cmd = computed(() => inspect.value?.cmd.filter(Boolean).join(' ') || '—')
+
+function onAction(kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause') {
+  if (props.container) emit('action', kind, props.container)
+}
+function onRename() {
+  if (props.container) emit('rename', props.container)
+}
+
+const isRunning = computed(() => props.container?.state === 'running')
+const isPaused = computed(() => props.container?.state === 'paused')
+</script>
+
+<script lang="ts">
+import { VideoPlay, VideoPause, RefreshRight, EditPen } from '@element-plus/icons-vue'
+export default {
+  components: { VideoPlay, VideoPause, RefreshRight, EditPen },
+}
 </script>
 
 <template>
-  <el-drawer v-model="visible" :title="container?.name || '容器详情'" size="50%">
+  <el-drawer v-model="visible" size="50%">
+    <template #header>
+      <div class="detail-header">
+        <span class="detail-title">{{ container?.name || '容器详情' }}</span>
+        <div class="detail-actions">
+          <template v-if="isRunning">
+            <el-button size="small" :icon="VideoPause" @click="onAction('pause')">暂停</el-button>
+            <el-button size="small" :icon="RefreshRight" @click="onAction('restart')">重启</el-button>
+            <el-button size="small" :icon="VideoPlay" @click="onAction('stop')">停止</el-button>
+          </template>
+          <template v-else-if="isPaused">
+            <el-button size="small" type="primary" :icon="VideoPlay" @click="onAction('unpause')">恢复</el-button>
+          </template>
+          <template v-else>
+            <el-button size="small" type="primary" :icon="VideoPlay" @click="onAction('start')">启动</el-button>
+          </template>
+          <el-button size="small" :icon="EditPen" @click="onRename">重命名</el-button>
+        </div>
+      </div>
+    </template>
     <div class="detail-wrap" v-if="container" v-loading="loading">
       <!-- 实时监控曲线 -->
       <div class="section">
@@ -328,6 +368,26 @@ const cmd = computed(() => inspect.value?.cmd.filter(Boolean).join(' ') || '—'
 </template>
 
 <style scoped>
+.detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.detail-title {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 .detail-wrap {
   display: flex;
   flex-direction: column;

@@ -62,8 +62,12 @@ pub fn run() {
             commands::container::start_container,
             commands::container::stop_container,
             commands::container::restart_container,
+            commands::container::pause_container,
+            commands::container::unpause_container,
+            commands::container::rename_container,
             commands::container::remove_container,
             commands::container::inspect_container,
+            commands::container::create_and_run_container,
             // 镜像
             commands::image::list_images,
             commands::image::remove_image,

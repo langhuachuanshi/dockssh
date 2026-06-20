@@ -22,15 +22,17 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'action', kind: 'start' | 'stop' | 'restart', c: Container): void
+  (e: 'action', kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause', c: Container): void
   (e: 'remove', c: Container): void
   (e: 'terminal', c: Container): void
   (e: 'logs', c: Container): void
   (e: 'detail', c: Container): void
   (e: 'openDir', c: Container): void
+  (e: 'rename', c: Container): void
 }>()
 
 const isRunning = computed(() => props.container.state === 'running')
+const isPaused = computed(() => props.container.state === 'paused')
 
 // ===== 状态样式 =====
 interface StateStyle {
@@ -131,7 +133,7 @@ const portItems = computed<PortItem[]>(() => {
 })
 const hasPorts = computed(() => portItems.value.length > 0)
 
-function onAction(kind: 'start' | 'stop' | 'restart') {
+function onAction(kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause') {
   emit('action', kind, props.container)
 }
 
@@ -139,6 +141,7 @@ function onMoreCmd(cmd: string) {
   if (cmd === 'detail') emit('detail', props.container)
   else if (cmd === 'logs') emit('logs', props.container)
   else if (cmd === 'openDir') emit('openDir', props.container)
+  else if (cmd === 'rename') emit('rename', props.container)
   else if (cmd === 'remove') emit('remove', props.container)
 }
 </script>
@@ -230,8 +233,12 @@ function onMoreCmd(cmd: string) {
             <!-- 操作 -->
             <div class="row-actions">
               <template v-if="isRunning">
-                <el-button size="small" :icon="VideoPause" @click="onAction('stop')">停止</el-button>
+                <el-button size="small" :icon="VideoPause" @click="onAction('pause')">暂停</el-button>
                 <el-button size="small" :icon="RefreshRight" @click="onAction('restart')">重启</el-button>
+                <el-button size="small" :icon="Monitor" @click="emit('terminal', container)">终端</el-button>
+              </template>
+              <template v-else-if="isPaused">
+                <el-button size="small" type="primary" :icon="VideoPlay" @click="onAction('unpause')">恢复</el-button>
                 <el-button size="small" :icon="Monitor" @click="emit('terminal', container)">终端</el-button>
               </template>
               <template v-else>
@@ -243,6 +250,7 @@ function onMoreCmd(cmd: string) {
                   <el-dropdown-menu>
                     <el-dropdown-item command="detail" :icon="View">详情</el-dropdown-item>
                     <el-dropdown-item command="logs" :icon="Document">日志</el-dropdown-item>
+                    <el-dropdown-item command="rename" :icon="EditPen">重命名</el-dropdown-item>
                     <el-dropdown-item command="openDir" :icon="FolderOpened">目录</el-dropdown-item>
                     <el-dropdown-item command="remove" :icon="Delete" divided>删除...</el-dropdown-item>
                   </el-dropdown-menu>
@@ -258,10 +266,10 @@ function onMoreCmd(cmd: string) {
 
 <script lang="ts">
 import {
-  VideoPlay, VideoPause, RefreshRight, Monitor, Document, MoreFilled, Connection, Box, View, Delete,
+  VideoPlay, VideoPause, RefreshRight, Monitor, Document, MoreFilled, Connection, Box, View, Delete, EditPen,
 } from '@element-plus/icons-vue'
 export default {
-  components: { VideoPlay, VideoPause, RefreshRight, Monitor, Document, MoreFilled, Connection, Box, View, Delete },
+  components: { VideoPlay, VideoPause, RefreshRight, Monitor, Document, MoreFilled, Connection, Box, View, Delete, EditPen },
 }
 </script>
 

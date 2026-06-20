@@ -129,8 +129,11 @@ async function refresh() {
   }
 }
 
-async function action(kind: 'start' | 'stop' | 'restart', c: Container) {
-  const actionName = kind === 'start' ? '启动' : kind === 'stop' ? '停止' : '重启'
+async function action(kind: 'start' | 'stop' | 'restart' | 'pause' | 'unpause', c: Container) {
+  const names: Record<string, string> = {
+    start: '启动', stop: '停止', restart: '重启', pause: '暂停', unpause: '恢复',
+  }
+  const actionName = names[kind]
   try {
     await ElMessageBox.confirm(`确认${actionName}容器「${c.name}」？`, '操作确认', {
       type: 'warning',
@@ -141,11 +144,40 @@ async function action(kind: 'start' | 'stop' | 'restart', c: Container) {
   try {
     if (kind === 'start') await api.startContainer(hostId.value, c.id)
     else if (kind === 'stop') await api.stopContainer(hostId.value, c.id)
-    else await api.restartContainer(hostId.value, c.id)
+    else if (kind === 'restart') await api.restartContainer(hostId.value, c.id)
+    else if (kind === 'pause') await api.pauseContainer(hostId.value, c.id)
+    else if (kind === 'unpause') await api.unpauseContainer(hostId.value, c.id)
     ElMessage.success(`已${actionName}`)
     await refresh()
   } catch (e) {
     ElMessage.error(`操作失败：${e}`)
+  }
+}
+
+/** 重命名容器：用 prompt 收集新名字 → rename_container → refresh */
+async function renameContainer(c: Container) {
+  let newName = ''
+  try {
+    const res = await ElMessageBox.prompt('请输入新的容器名称', `重命名「${c.name}」`, {
+      inputValue: c.name,
+      inputPlaceholder: '只能包含字母、数字、下划线、连字符、点',
+      inputValidator: (v: string) => {
+        const t = (v || '').trim()
+        if (!t) return '名称不能为空'
+        if (!/^[a-zA-Z0-9_.-]+$/.test(t)) return '只能包含字母、数字、下划线、连字符、点'
+        return true
+      },
+    })
+    newName = res.value.trim()
+  } catch {
+    return
+  }
+  try {
+    await api.renameContainer(hostId.value, c.id, newName)
+    ElMessage.success(`已重命名为「${newName}」`)
+    await refresh()
+  } catch (e) {
+    ElMessage.error(`重命名失败：${e}`)
   }
 }
 
@@ -356,6 +388,7 @@ onBeforeUnmount(() => {
           :net-rate="netRateOf(c)"
           @action="action"
           @remove="removeContainer"
+          @rename="renameContainer"
           @terminal="openTerminal"
           @logs="viewLogs"
           @detail="openDetail"
@@ -370,6 +403,8 @@ onBeforeUnmount(() => {
       v-model="detailVisible"
       :host-id="hostId"
       :container="detailContainer"
+      @action="action"
+      @rename="renameContainer"
     />
   </div>
 </template>
