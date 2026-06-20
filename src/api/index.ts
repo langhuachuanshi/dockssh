@@ -12,6 +12,7 @@ import type {
   DirListing,
   Host,
   Image,
+  LogChunk,
   Network,
   StatsSample,
   Volume,
@@ -166,11 +167,35 @@ export const fileUpload = (hostId: string, local: string, remoteDir: string) =>
 
 // ===== 日志（流式） =====
 
+export interface StartLogsOptions {
+  /** 初始回看行数（默认 200） */
+  tail?: string
+  /** 时间过滤起点（RFC3339 或相对时间，透传 docker logs --since） */
+  since?: string
+  /** 时间过滤终点（透传 docker logs --until） */
+  until?: string
+  /** 每行加时间戳前缀 */
+  timestamps?: boolean
+  /** 是否持续跟踪，默认 true */
+  follow?: boolean
+}
+
 export const startLogs = (
   hostId: string,
   container: string,
-  tail?: string,
-) => invoke<void>('start_logs', { hostId, container, tail })
+  opts: StartLogsOptions = {},
+) =>
+  invoke<void>('start_logs', {
+    hostId,
+    container,
+    // 后端 tail 是 Option<String>，el-input-number 可能产生 number，统一强转
+    tail: opts.tail != null ? String(opts.tail) : undefined,
+    since: opts.since,
+    until: opts.until,
+    timestamps: opts.timestamps,
+    follow: opts.follow,
+  })
+
 export const stopLogs = (hostId: string, container: string) =>
   invoke<void>('stop_logs', { hostId, container })
 
@@ -178,11 +203,15 @@ export const stopLogs = (hostId: string, container: string) =>
 export const onLogChunk = (
   hostId: string,
   container: string,
-  cb: (chunk: string) => void,
+  cb: (chunk: LogChunk) => void,
 ): Promise<UnlistenFn> =>
-  listen<string>(`dockssh://log-chunk:${hostId}:${container}`, (e) =>
+  listen<LogChunk>(`dockssh://log-chunk:${hostId}:${container}`, (e) =>
     cb(e.payload),
   )
+
+/** 把文本写入本地文件（用于日志导出）。path 由 save() 对话框提供。 */
+export const saveTextLocal = (path: string, content: string) =>
+  invoke<void>('save_text_local', { path, content })
 
 // ===== stats（流式） =====
 

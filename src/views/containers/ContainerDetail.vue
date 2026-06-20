@@ -15,15 +15,19 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { ElMessage } from 'element-plus'
 import * as api from '@/api'
-import type { Container, ContainerInspect, StatsSample } from '@/api/types'
+import type { Container, ContainerInspect } from '@/api/types'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 
-const props = defineProps<{
-  modelValue: boolean
-  hostId: string
-  container: Container | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean
+    /** 主机 id；keep-alive 切换瞬间可能为 undefined，组件内部做了守卫 */
+    hostId?: string
+    container: Container | null
+  }>(),
+  { hostId: '' },
+)
 
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
@@ -99,7 +103,7 @@ function pushPoint(cpu: number, mem: number) {
 }
 
 async function loadInspect() {
-  if (!props.container) return
+  if (!props.container || !props.hostId) return
   loading.value = true
   try {
     inspect.value = await api.inspectContainer(props.hostId, props.container.id)
@@ -111,6 +115,7 @@ async function loadInspect() {
 }
 
 async function startListen() {
+  if (!props.hostId) return
   // 注意：不调 startStats —— 后端 stats 流是「每主机单实例」，
   // 由容器列表页统一管理生命周期。详情只监听已存在的流事件，
   // 避免关闭详情时 stopStats 把列表的流也停了。

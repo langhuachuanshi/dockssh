@@ -115,16 +115,11 @@ async function startProjectLogs() {
     logLines.value = ['（该项目暂无容器）']
     return
   }
-  // 为每个容器订阅日志流
+  // 为每个容器订阅日志流（注意：先挂监听再启动，避免历史首包被丢）
   for (const c of containers.value) {
-    try {
-      await api.startLogs(hostId.value, c.id || c.name, '200')
-    } catch {
-      /* 单个失败不阻断其余 */
-    }
     const un = await api.onLogChunk(hostId.value, c.id || c.name, (chunk) => {
       const prefix = `[${c.name}] `
-      for (const line of chunk.split('\n')) {
+      for (const line of chunk.text.split('\n')) {
         if (line === '') continue
         logLines.value.push(prefix + line)
       }
@@ -134,6 +129,11 @@ async function startProjectLogs() {
       if (logAutoScroll.value) nextTick(scrollLogBottom)
     })
     logUnlistens.push(un)
+    try {
+      await api.startLogs(hostId.value, c.id || c.name, { tail: '200' })
+    } catch {
+      /* 单个失败不阻断其余 */
+    }
   }
 }
 

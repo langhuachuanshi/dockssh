@@ -37,7 +37,7 @@ pub async fn start_stats(
     let mut client = arc.lock().await;
 
     let (_id, tx) = client
-        .exec_stream(&cmd, move |chunk| {
+        .exec_stream(&cmd, move |_kind, chunk| {
             let app = app.clone();
             let evt = event.clone();
             let raw_evt = raw_event.clone();

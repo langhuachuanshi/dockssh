@@ -156,6 +156,16 @@ export interface VolumeInspect {
   mountpoint: string
 }
 
+// ===== 日志 =====
+
+/** 日志数据块，携带来源流标签（stdout/stderr）。 */
+export interface LogChunk {
+  /** 来源流：stdout 或 stderr */
+  stream: 'stdout' | 'stderr'
+  /** 本块文本（可能跨多行） */
+  text: string
+}
+
 // ===== 错误（与 src-tauri/src/error.rs 的 ErrorKind 对齐） =====
 
 /**

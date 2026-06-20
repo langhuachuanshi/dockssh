@@ -33,6 +33,15 @@ impl Handler for ClientHandler {
     }
 }
 
+/// 流式数据的来源：标准输出或标准错误。
+/// SSH channel 把 stdout 作为 Data、stderr 作为 ExtendedData 推送。
+/// docker logs 会把容器的 stderr 输出到 SSH 的 ExtendedData，借此可做分流。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
 /// 一条命令的执行结果。
 pub struct ExecResult {
     pub stdout: String,
@@ -183,26 +192,30 @@ impl SshClient {
 
     /// 执行一条流式命令，对每个输出块调用回调（用于 logs -f / stats）。
     ///
-    /// 返回一个可 await 的 future，调用方通常 spawn 到后台 task。
-    /// 注意：调用方需要持有 channel 的关闭信号来中断。
+    /// 回调携带 `StreamKind` 标签：stdout 块为 `Stdout`，stderr 块为 `Stderr`，
+    /// 调用方可据此分流（如 docker logs 区分容器的 stdout/stderr）。
+    ///
+    /// 返回一个 oneshot Sender，调用方发送 () 即可中断后台读取。
+    /// 注意：spawn 的任务只捕获 channel + 关闭信号，不持有 SshClient 的锁，
+    /// 因此长流（如 logs -f）不会阻塞其他命令。
     pub async fn exec_stream<F>(
         &mut self,
         command: &str,
         mut on_chunk: F,
     ) -> AppResult<(ChannelId, tokio::sync::oneshot::Sender<()>)>
     where
-        F: FnMut(Vec<u8>) + Send + 'static,
+        F: FnMut(StreamKind, Vec<u8>) + Send + 'static,
     {
         let mut channel = self
             .handle
             .channel_open_session()
             .await
-            .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?;
+            .map_err(|e| AppError::Ssh(format!("打开 channel 失败：{e}")))?;
 
         channel
             .exec(true, command)
             .await
-            .map_err(|e| AppError::Ssh(format!("执行流式命令失败: {e}")))?;
+            .map_err(|e| AppError::Ssh(format!("执行流式命令失败：{e}")))?;
 
         let id = channel.id();
 
@@ -220,10 +233,10 @@ impl SshClient {
                     msg = channel.wait() => {
                         match msg {
                             Some(ChannelMsg::Data { ref data }) => {
-                                on_chunk(data.to_vec());
+                                on_chunk(StreamKind::Stdout, data.to_vec());
                             }
                             Some(ChannelMsg::ExtendedData { ref data, .. }) => {
-                                on_chunk(data.to_vec());
+                                on_chunk(StreamKind::Stderr, data.to_vec());
                             }
                             Some(ChannelMsg::ExitStatus { .. })
                             | Some(ChannelMsg::Eof)

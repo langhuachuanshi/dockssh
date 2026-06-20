@@ -101,6 +101,7 @@ pub fn run() {
             // 日志
             commands::logs::start_logs,
             commands::logs::stop_logs,
+            commands::logs::save_text_local,
             // stats
             commands::stats::start_stats,
             commands::stats::stop_stats,

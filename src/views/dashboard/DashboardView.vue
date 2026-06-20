@@ -224,15 +224,17 @@ function restoreLiveFromHistory() {
 }
 
 async function startStats() {
+  // 先挂监听再启动流：docker stats 打开瞬间会突发推送第一批采样，
+  // 若监听器还没注册，Tauri 事件会被丢弃 → 开头几秒无数据。
+  unlisten = await api.onStats(hostId.value, (s) => {
+    // 仅缓存，聚合在 tick 内完成
+    latestByContainer.set(s.container_id || s.name, s);
+  });
   try {
     await api.startStats(hostId.value, STATS_INTERVAL);
   } catch (e) {
     console.error("[stats] start_stats 失败:", e);
   }
-  unlisten = await api.onStats(hostId.value, (s) => {
-    // 仅缓存，聚合在 tick 内完成
-    latestByContainer.set(s.container_id || s.name, s);
-  });
 }
 
 /** 与 stats interval 对齐：把当前各容器最新采样汇总成一个整机点。 */
@@ -291,7 +293,7 @@ function stopStats() {
   unlisten = null;
   latestByContainer.clear();
   // 注意：不清 store 历史，切回来要恢复曲线
-  api.stopStats(hostId.value).catch(() => {});
+  if (hostId.value) api.stopStats(hostId.value).catch(() => {});
 }
 
 function resizeCharts() {
@@ -299,6 +301,11 @@ function resizeCharts() {
 }
 
 onMounted(async () => {
+  // 守卫：keep-alive 场景下若路由 param 尚未就绪，跳过本次初始化
+  if (!hostId.value) {
+    console.warn("[dashboard] hostId 为空，跳过初始化");
+    return;
+  }
   await store.ensureConnected(hostId.value);
   await loadAll();
   initCharts();
