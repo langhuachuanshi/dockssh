@@ -226,6 +226,13 @@ export const onStats = (
 ): Promise<UnlistenFn> =>
   listen<StatsSample>(`dockssh://stats:${hostId}`, (e) => cb(e.payload))
 
+/** 监听 docker stats 的原始行（含无法解析的 stderr/表头），仅诊断用 */
+export const onStatsRaw = (
+  hostId: string,
+  cb: (line: string) => void,
+): Promise<UnlistenFn> =>
+  listen<string>(`dockssh://stats-raw:${hostId}`, (e) => cb(e.payload))
+
 // ===== 终端（docker exec -it 透传）=====
 //
 // 数据流：后端 emit base64 字符串，前端解码成 Uint8Array 喂给 xterm.write。

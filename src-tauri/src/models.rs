@@ -64,6 +64,9 @@ pub struct Container {
     pub ports: Vec<String>,
     /// compose 项目名（如有）
     pub compose_project: Option<String>,
+    /// 创建时间（docker 的 CreatedAt 原样，如 "2024-01-01 12:00:00 +0800 CST"）
+    #[serde(default)]
+    pub created: String,
 }
 
 /// 镜像摘要（来自 docker images）。

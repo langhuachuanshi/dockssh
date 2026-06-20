@@ -12,6 +12,10 @@ use crate::ssh::client::SshClient;
 
 #[derive(Debug, Deserialize)]
 struct StatsRow {
+    /// 12 位短 ID（与 docker ps 的 .ID 一致）
+    #[serde(rename = "ID", default)]
+    id: String,
+    /// 64 位完整 ID
     #[serde(rename = "Container", default)]
     container: String,
     #[serde(rename = "Name", default)]
@@ -45,13 +49,20 @@ fn pids(s: &str) -> u64 {
 
 /// 从一行 stats JSON 文本解析成采样。
 pub fn parse_line(line: &str) -> Option<StatsSample> {
-    let line = line.trim();
+    // docker stats 刷新屏幕时在每批第一行前插入 VT100 光标控制码（`\x1b[H`、`\x1b[K`、`\x1b[J`），
+    // 这些非 JSON 字符会导致 serde_json 解析失败。
+    // 稳定做法：定位第一个 `{`，从那里开始解析（JSON 对象一定以 { 开头）。
+    let brace = line.find('{')?;
+    let line = line[brace..].trim();
     if line.is_empty() {
         return None;
     }
     let row: StatsRow = serde_json::from_str(line).ok()?;
+    // 优先用 12 位短 ID（与 docker ps 的 .ID 一致，前端可精确匹配），
+    // 没有则回退到 64 位完整 ID
+    let cid = if !row.id.is_empty() { row.id } else { row.container };
     Some(StatsSample {
-        container_id: row.container,
+        container_id: cid,
         name: row.name,
         cpu_percent: pct(&row.cpu),
         mem_usage: row.mem_usage,

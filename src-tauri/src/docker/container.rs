@@ -29,6 +29,8 @@ struct PsRow {
     ports: String,
     #[serde(rename = "Labels", default)]
     labels: String,
+    #[serde(rename = "CreatedAt", default)]
+    created_at: String,
 }
 
 /// 列出所有容器（含已停止）。compose_project 从 labels 里提取。
@@ -55,16 +57,17 @@ pub async fn list(client: &mut SshClient) -> AppResult<Vec<Container>> {
                 kv.strip_prefix("com.docker.compose.project=")
                     .map(|v| v.to_string())
             });
-        out.push(Container {
-            id: row.id,
-            name: row.names,
-            image: row.image,
-            command: row.command,
-            state: row.state,
-            status: row.status,
-            ports: crate::docker::parse::parse_ports(&row.ports),
-            compose_project,
-        });
+    out.push(Container {
+        id: row.id,
+        name: row.names,
+        image: row.image,
+        command: row.command,
+        state: row.state,
+        status: row.status,
+        ports: crate::docker::parse::parse_ports(&row.ports),
+        compose_project,
+        created: row.created_at,
+    });
     }
     Ok(out)
 }

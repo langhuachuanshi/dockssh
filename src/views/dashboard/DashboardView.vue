@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -81,6 +81,8 @@ let netChart: echarts.ECharts | null = null;
 // 首次加载才显示全屏 loading；轮询刷新静默更新，避免遮挡已渲染内容
 let loadedOnce = false;
 async function loadAll() {
+  // 守卫：hostId 为空（keep-alive 切换瞬间）时跳过，避免 invalid args
+  if (!hostId.value) return;
   if (!loadedOnce) loading.value = true;
   try {
     const [c, i] = await Promise.all([
@@ -300,8 +302,26 @@ function resizeCharts() {
   netChart?.resize();
 }
 
+function startTimers() {
+  if (tickTimer != null || pollTimer != null) return;
+  tickTimer = window.setInterval(aggregateTick, STATS_INTERVAL * 1000);
+  pollTimer = window.setInterval(loadAll, 8000);
+}
+
+function stopTimers() {
+  if (tickTimer) {
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+let inited = false;
 onMounted(async () => {
-  // 守卫：keep-alive 场景下若路由 param 尚未就绪，跳过本次初始化
+  // 守卫：keep-alive 场景下若路由 param 尚未就绪，跳过初始化
   if (!hostId.value) {
     console.warn("[dashboard] hostId 为空，跳过初始化");
     return;
@@ -312,16 +332,27 @@ onMounted(async () => {
   // 若 store 有历史（切回来），先用最后一个点恢复实时数值，避免空白
   restoreLiveFromHistory();
   await startStats();
-  tickTimer = window.setInterval(aggregateTick, STATS_INTERVAL * 1000);
-  // 容器/镜像列表轮询刷新（反映启停、影响健康卡片数字）
-  pollTimer = window.setInterval(loadAll, 8000);
+  startTimers();
   window.addEventListener("resize", resizeCharts);
+  inited = true;
 });
 
-onUnmounted(() => {
+// keep-alive 激活/失活：恢复/暂停 stats 流和轮询，避免后台空跑 + hostId 漂移报错
+onActivated(() => {
+  if (!inited) return;
+  restoreLiveFromHistory();
+  if (hostId.value) startStats();
+  startTimers();
+});
+
+onDeactivated(() => {
+  stopTimers();
   stopStats();
-  if (tickTimer) clearInterval(tickTimer);
-  if (pollTimer) clearInterval(pollTimer);
+});
+
+onBeforeUnmount(() => {
+  stopTimers();
+  stopStats();
   window.removeEventListener("resize", resizeCharts);
   netChart?.dispose();
 });

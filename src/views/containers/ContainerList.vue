@@ -6,7 +6,7 @@
  * 卡片订阅 stats 流事件，按 container_id 分发最新采样。
  * 详情为独立组件 ContainerDetail（真实 inspect + 监控曲线）。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '@/api'
@@ -43,6 +43,7 @@ const netRateMap = ref<Map<string, { rx: number; tx: number }>>(new Map())
 
 let pollTimer: number | null = null
 let statsUnlisten: (() => void) | null = null
+let statsRawUnlisten: (() => void) | null = null
 const STATS_INTERVAL = 2
 
 /** 解析 docker stats 的网络字节数（如 "1.23kB" / "4.56MB" / "789B"）。
@@ -59,8 +60,17 @@ function parseSize(s: string): number {
   return val * (factor[unit] ?? 1)
 }
 
-const filtered = computed(() =>
-  containers.value.filter((c) => {
+/** 把 docker 的 CreatedAt 字符串解析成可比较的毫秒时间戳。
+ * docker 输出形如 "2024-01-01 12:00:00 +0800 CST"，去掉 CST 后用 Date 解析。 */
+function parseCreated(s: string): number {
+  if (!s) return 0
+  const cleaned = s.replace(/\s*CST\s*$/i, '').trim()
+  const t = Date.parse(cleaned)
+  return isNaN(t) ? 0 : t
+}
+
+const filtered = computed(() => {
+  const result = containers.value.filter((c) => {
     if (onlyRunning.value && c.state !== 'running') return false
     if (!search.value) return true
     const kw = search.value.toLowerCase()
@@ -69,51 +79,46 @@ const filtered = computed(() =>
       c.image.toLowerCase().includes(kw) ||
       c.id.toLowerCase().includes(kw)
     )
-  }),
-)
+  })
+  // 按创建时间排序：新创建的在前（倒序）
+  result.sort((a, b) => parseCreated(b.created) - parseCreated(a.created))
+  return result
+})
 
 function statsOf(c: Container): StatsSample | null {
-  // 1. 精确匹配：container_id（短ID 12 位）或 name
-  // 2. 兜底：docker stats 的 container_id 可能是 64 位完整 ID，
-  //    docker ps 的是 12 位短 ID，用前缀匹配
-  const direct =
+  // container_id 已归一化为 12 位短 ID，与 docker ps 的 c.id 一致，可直接精确匹配；
+  // 兜底：name（去前导斜杠）+ 完整 ID 前缀匹配
+  const nameNoSlash = c.name.replace(/^\//, '')
+  const result =
     statsMap.value.get(c.id) ||
     statsMap.value.get(c.name) ||
-    statsMap.value.get(c.name.replace(/^\//, ''))
-  if (direct) return direct
-  const fallback = findByShortId(statsMap.value, c.id)
-  console.debug('[stats-match]', {
-    want: { id: c.id, name: c.name, state: c.state },
-    mapKeys: [...statsMap.value.keys()],
-    matched: !!fallback,
-  })
-  return fallback
+    statsMap.value.get(nameNoSlash) ||
+    findByShortId(statsMap.value, c.id)
+  return result
 }
 
 function netRateOf(c: Container): { rx: number; tx: number } | null {
-  const direct =
+  return (
     netRateMap.value.get(c.id) ||
     netRateMap.value.get(c.name) ||
-    netRateMap.value.get(c.name.replace(/^\//, ''))
-  if (direct) return direct
-  return findByShortId(netRateMap.value, c.id)
+    netRateMap.value.get(c.name.replace(/^\//, '')) ||
+    findByShortId(netRateMap.value, c.id)
+  )
 }
 
-/** 用短 ID（12 位）前缀匹配 statsMap 里的完整 ID（64 位）。
- * 只对「键是完整 hex ID」的条目做前缀匹配，避免误命中 name 等 key。 */
+/** 兜底前缀匹配（key 已归一化为 12 位短 ID，正常无需走到这里）。 */
 function findByShortId<V>(map: Map<string, V>, shortId: string): V | null {
-  if (!shortId || shortId.length >= 32) return null
-  // 短 ID 必须是 hex 才有意义做前缀匹配
-  if (!/^[0-9a-f]+$/i.test(shortId)) return null
+  if (!shortId) return null
   for (const [k, v] of map) {
-    // 只在键本身是足够长的 hex ID 时做前缀匹配，跳过 name 等非 ID 键
-    if (k.length < 32 || !/^[0-9a-f]+$/i.test(k)) continue
-    if (k.startsWith(shortId)) return v
+    if (k.length >= 12 && /^[0-9a-f]+$/i.test(k) && (k.startsWith(shortId) || shortId.startsWith(k))) {
+      return v
+    }
   }
   return null
 }
 
 async function refresh() {
+  if (!hostId.value) return
   loading.value = true
   try {
     containers.value = await api.listContainers(hostId.value)
@@ -204,38 +209,69 @@ async function openDir(c: Container) {
 }
 
 // ===== stats 订阅 =====
+
+/** 处理一个 stats 采样：归一化短 ID、存入 map、计算网络速率差分。
+ * 被 onStats（解析好的）和 onStatsRaw（原始行自行解析的）共用。 */
+function handleSample(s: StatsSample) {
+  // 归一化 key：后端可能返回 12 位短 ID（新版）或 64 位完整 ID（旧版），
+  // 统一存短 ID（取前 12 位）+ name 两套 key，确保和 docker ps 的 c.id 精确匹配。
+  const shortId = s.container_id.length > 12 ? s.container_id.slice(0, 12) : s.container_id
+  const sample = { ...s, container_id: shortId }
+  statsMap.value.set(shortId, sample)
+  if (s.name) statsMap.value.set(s.name, sample)
+
+  // 计算网络速率差分（统一用短 ID 作逻辑 key）
+  const key = shortId
+  const parts = (s.net_io || '').split('/')
+  const rxNow = parts[0] ? parseSize(parts[0]) : 0
+  const txNow = parts[1] ? parseSize(parts[1]) : 0
+  const now = Date.now()
+  const prev = netPrevMap.value.get(key)
+  if (prev && now > prev.ts) {
+    const dt = (now - prev.ts) / 1000
+    const rxRate = Math.max(0, (rxNow - prev.rx) / dt)
+    const txRate = Math.max(0, (txNow - prev.tx) / dt)
+    netRateMap.value.set(key, { rx: rxRate, tx: txRate })
+    if (s.name) netRateMap.value.set(s.name, { rx: rxRate, tx: txRate })
+  }
+  netPrevMap.value.set(key, { rx: rxNow, tx: txNow, ts: now })
+
+  // 触发响应式：重新赋值 Map
+  statsMap.value = new Map(statsMap.value)
+  netRateMap.value = new Map(netRateMap.value)
+  netPrevMap.value = new Map(netPrevMap.value)
+}
+
 async function startStats() {
   // 先挂监听再启动流：docker stats 打开瞬间会突发推送第一批采样，
   // 若监听器还没注册，Tauri 事件会被丢弃 → 开头几秒无数据。
   statsUnlisten = await api.onStats(hostId.value, (s) => {
-    // 同时用 container_id 和 name 作 key 存，方便卡片两种方式查找
-    // （docker ps 的 id 是 12 位短 ID，docker stats 的 container_id 是 64 位完整 ID，
-    //  精确查可能对不上，statsOf 另做前缀匹配兜底）
-    statsMap.value.set(s.container_id, s)
-    if (s.name) statsMap.value.set(s.name, s)
-    console.debug('[stats-recv]', { id: s.container_id, name: s.name, cpu: s.cpu_percent, mem: s.mem_usage, net: s.net_io })
-
-    // 计算网络速率差分（统一用 container_id 作逻辑 key）
-    const key = s.container_id
-    const parts = (s.net_io || '').split('/')
-    const rxNow = parts[0] ? parseSize(parts[0]) : 0
-    const txNow = parts[1] ? parseSize(parts[1]) : 0
-    const now = Date.now()
-    const prev = netPrevMap.value.get(key)
-    if (prev && now > prev.ts) {
-      const dt = (now - prev.ts) / 1000
-      const rxRate = Math.max(0, (rxNow - prev.rx) / dt)
-      const txRate = Math.max(0, (txNow - prev.tx) / dt)
-      netRateMap.value.set(key, { rx: rxRate, tx: txRate })
-      if (s.name) netRateMap.value.set(s.name, { rx: rxRate, tx: txRate })
-    }
-    netPrevMap.value.set(key, { rx: rxNow, tx: txNow, ts: now })
-
-    // 触发响应式：重新赋值 Map
-    statsMap.value = new Map(statsMap.value)
-    netRateMap.value = new Map(netRateMap.value)
-    netPrevMap.value = new Map(netPrevMap.value)
+    handleSample(s)
   })
+
+  // 兜底：监听原始行，自行解析。旧后端每批第一行带 \x1b[H 控制码导致 parse_line 失败，
+  // 前端补解析，确保所有容器（尤其第一个）都能进 statsMap。
+  statsRawUnlisten = await api.onStatsRaw(hostId.value, (line) => {
+    const brace = line.indexOf('{')
+    if (brace < 0) return
+    const json = line.slice(brace)
+    try {
+      const row = JSON.parse(json)
+      handleSample({
+        container_id: row.ID || row.Container || '',
+        name: row.Name || '',
+        cpu_percent: parseFloat((row.CPUPerc || '0').replace('%', '')) || 0,
+        mem_usage: row.MemUsage || '',
+        mem_percent: parseFloat((row.MemPerc || '0').replace('%', '')) || 0,
+        net_io: row.NetIO || '',
+        block_io: row.BlockIO || '',
+        pids: parseInt(row.PIDs || '0', 10) || 0,
+      })
+    } catch {
+      /* 非 JSON 行（表头/空行），忽略 */
+    }
+  })
+
   try {
     await api.startStats(hostId.value, STATS_INTERVAL)
   } catch (e) {
@@ -246,12 +282,15 @@ async function startStats() {
 function stopStats() {
   statsUnlisten?.()
   statsUnlisten = null
+  statsRawUnlisten?.()
+  statsRawUnlisten = null
   statsMap.value.clear()
   netPrevMap.value.clear()
   netRateMap.value.clear()
   if (hostId.value) api.stopStats(hostId.value).catch(() => {})
 }
 
+let inited = false
 onMounted(async () => {
   // 守卫：keep-alive 场景下若路由 param 尚未就绪，跳过初始化
   if (!hostId.value) {
@@ -262,8 +301,27 @@ onMounted(async () => {
   await refresh()
   await startStats()
   pollTimer = window.setInterval(refresh, 8000)
+  inited = true
 })
-onUnmounted(() => {
+
+// keep-alive 激活/失活：恢复/暂停 stats 流和轮询，避免后台空跑 + hostId 漂移报错
+onActivated(() => {
+  if (!inited) return
+  if (hostId.value) {
+    startStats()
+    if (!pollTimer) pollTimer = window.setInterval(refresh, 8000)
+  }
+})
+
+onDeactivated(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  stopStats()
+})
+
+onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   stopStats()
 })

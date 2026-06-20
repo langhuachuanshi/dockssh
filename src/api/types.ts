@@ -36,6 +36,8 @@ export interface Container {
   status: string
   ports: string[]
   compose_project: string | null
+  /** 创建时间（docker 的 CreatedAt 原样，如 "2024-01-01 12:00:00 +0800 CST"） */
+  created: string
 }
 
 export interface Image {
