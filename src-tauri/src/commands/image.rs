@@ -25,3 +25,16 @@ pub async fn remove_image(
     let mut client = arc.lock().await;
     di::remove(&mut client, &id, force.unwrap_or(false)).await
 }
+
+/// 批量删除镜像。一次 SSH 执行多个 id，比前端循环调用 remove_image 快得多。
+#[tauri::command]
+pub async fn remove_images(
+    state: State<'_, SharedState>,
+    host_id: String,
+    ids: Vec<String>,
+    force: Option<bool>,
+) -> AppResult<()> {
+    let arc = state.pool.get(&host_id).await?;
+    let mut client = arc.lock().await;
+    di::remove_many(&mut client, &ids, force.unwrap_or(false)).await
+}

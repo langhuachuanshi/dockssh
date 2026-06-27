@@ -71,6 +71,7 @@ pub fn run() {
             // 镜像
             commands::image::list_images,
             commands::image::remove_image,
+            commands::image::remove_images,
             // 网络
             commands::network::list_networks,
             // 存储卷

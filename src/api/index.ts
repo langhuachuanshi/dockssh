@@ -81,6 +81,9 @@ export const listImages = (hostId: string) =>
   invoke<Image[]>('list_images', { hostId })
 export const removeImage = (hostId: string, id: string, force = false) =>
   invoke<void>('remove_image', { hostId, id, force })
+/** 批量删除镜像（一次 SSH 执行多个 id） */
+export const removeImages = (hostId: string, ids: string[], force = false) =>
+  invoke<void>('remove_images', { hostId, ids, force })
 
 // ===== 网络 =====
 
